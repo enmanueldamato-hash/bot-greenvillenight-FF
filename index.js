@@ -245,4 +245,6 @@ Escribe !menu para consultar los comandos disponibles del bot.
 Quien incumpla las reglas puede recibir una advertencia o ser expulsado por los administradores.
 
 ━━━━━━━━━━━━━━━━━━━━
-💙 ¡Respeta
+💙 ¡Respeta!
+;
+}
