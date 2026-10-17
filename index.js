@@ -1,210 +1,621 @@
 const express = require('express');
-const qrcode = require('qrcode');
+const QRCode = require('qrcode');
+const {
+  default: makeWASocket,
+  useMultiFileAuthState,
+  DisconnectReason
+} = require('@whiskeysockets/baileys');
+const P = require('pino');
+const fs = require('fs');
+const path = require('path');
+
 const app = express();
-let qrCodeData = null, isConnected = false;
-app.get('/', (req,res)=> {
-  if (isConnected) res.send('<h1>🟢 GreenvilleNight FF - BOT ON</h1>');
-  else if (qrCodeData) res.send(`<div style="text-align:center;font-family:Arial;padding:20px;background:#0a0a0a;color:white;"><h1>🌃 GreenvilleNight FF</h1><img src="${qrCodeData}" style="width:350px;border:10px solid #00ff88;border-radius:20px;"></div>`);
-  else res.send('<h1>⏳ Iniciando...</h1>');
+const PORT = process.env.PORT || 3000;
+
+let qrCodeData = null;
+let isConnected = false;
+let sock = null;
+
+const DATA_DIR = './data';
+const DATA_FILE = path.join(DATA_DIR, 'bot.json');
+
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+function loadData() {
+  try {
+    if (fs.existsSync(DATA_FILE)) {
+      return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    }
+  } catch (error) {
+    console.error('Error leyendo datos:', error.message);
+  }
+
+  return {
+    grupos: {},
+    comandos: {},
+    dinero: {},
+    niveles: {}
+  };
+}
+
+let db = loadData();
+
+function saveData() {
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
+  } catch (error) {
+    console.error('Error guardando datos:', error.message);
+  }
+}
+
+app.get('/', async (req, res) => {
+  if (isConnected) {
+    return res.send(`
+      <html>
+        <head><meta name="viewport" content="width=device-width"></head>
+        <body style="background:#080808;color:#00ff88;text-align:center;font-family:Arial;padding:35px">
+          <h1>🟢 GreenvilleNight FF</h1>
+          <h2>BOT CONECTADO</h2>
+          <p>El servidor está funcionando.</p>
+        </body>
+      </html>
+    `);
+  }
+
+  if (qrCodeData) {
+    try {
+      const qr = await QRCode.toDataURL(qrCodeData);
+
+      return res.send(`
+        <html>
+          <head><meta name="viewport" content="width=device-width"></head>
+          <body style="background:#080808;color:white;text-align:center;font-family:Arial;padding:20px">
+            <h1>🔥 GreenvilleNight FF</h1>
+            <h3>Escanea el QR desde WhatsApp</h3>
+            <img src="${qr}" style="max-width:100%;width:300px">
+            <p>WhatsApp → Dispositivos vinculados → Vincular dispositivo</p>
+          </body>
+        </html>
+      `);
+    } catch (error) {
+      return res.status(500).send('No se pudo generar el QR.');
+    }
+  }
+
+  res.send(`
+    <html>
+      <body style="background:#080808;color:white;text-align:center;font-family:Arial;padding:35px">
+        <h1>🔥 GreenvilleNight FF</h1>
+        <p>Esperando el código QR de WhatsApp...</p>
+        <p>Actualiza esta página en unos segundos.</p>
+      </body>
+    </html>
+  `);
 });
-app.listen(process.env.PORT || 3000, ()=> console.log('✅ WEB ON'));
 
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
-const P = require('pino'); const axios = require('axios'); const fs = require('fs');
-let BOT_ON=true, verificaciones=new Map();
-if(!fs.existsSync('./roles.json')) fs.writeFileSync('./roles.json','{}');
-if(!fs.existsSync('./economia.json')) fs.writeFileSync('./economia.json','{}');
-if(!fs.existsSync('./warns.json')) fs.writeFileSync('./warns.json','{}');
-let roles=JSON.parse(fs.readFileSync('./roles.json'));
-let eco=JSON.parse(fs.readFileSync('./economia.json'));
-let warns=JSON.parse(fs.readFileSync('./warns.json'));
+app.get('/status', (req, res) => {
+  res.json({
+    bot: 'GreenvilleNight FF',
+    connected: isConnected,
+    qrAvailable: Boolean(qrCodeData)
+  });
+});
 
-const PERMISOS={
-  'owner':10,'owner2':9,'owner3':8,'co-owner':7,'propietario':7,'propietario2':6,'propietario3':5,'admin':4,'mod':3,'helper':2,'policia':2,'ems':2,'mecanico':2,'verificado':1
-};
-function getRol(j){return roles[j]||'user';}
-function tienePermiso(j,m){return (PERMISOS[getRol(j)]||0)>=(PERMISOS[m]||0);}
-function esOwnerProtegido(j){const rol=getRol(j); return ['owner','owner2','owner3','co-owner','propietario','propietario2','propietario3'].includes(rol);}
-function guardarRoles(){fs.writeFileSync('./roles.json',JSON.stringify(roles,null,2));}
-function guardarWarns(){fs.writeFileSync('./warns.json',JSON.stringify(warns,null,2));}
-function getTexto(msg){
-  let m=msg.message; if(!m) return '';
-  if(m.ephemeralMessage) m=m.ephemeralMessage.message;
-  if(m.viewOnceMessage) m=m.viewOnceMessage.message;
-  if(m.viewOnceMessageV2) m=m.viewOnceMessageV2.message;
-  if(m.documentWithCaptionMessage) m=m.documentWithCaptionMessage.message;
-  if(m.conversation) return m.conversation.trim();
-  if(m.extendedTextMessage?.text) return m.extendedTextMessage.text.trim();
-  if(m.imageMessage?.caption) return m.imageMessage.caption.trim();
-  if(m.videoMessage?.caption) return m.videoMessage.caption.trim();
-  if(m.buttonsResponseMessage?.selectedButtonId) return m.buttonsResponseMessage.selectedButtonId.trim();
-  if(m.listResponseMessage?.singleSelectReply?.selectedRowId) return m.listResponseMessage.singleSelectReply.selectedRowId.trim();
-  if(m.templateButtonReplyMessage?.selectedId) return m.templateButtonReplyMessage.selectedId.trim();
-  return '';
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Servidor activo en puerto ${PORT}`);
+});
+
+function getText(message) {
+  const m = message.message || {};
+
+  return (
+    m.conversation ||
+    m.extendedTextMessage?.text ||
+    m.imageMessage?.caption ||
+    m.videoMessage?.caption ||
+    m.documentMessage?.caption ||
+    ''
+  ).trim();
 }
 
-async function startBot(){
-  const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-  const sock = makeWASocket({ logger: P({level:'silent'}), auth: state, printQRInTerminal:false, isPublic:true, markOnlineOnConnect:true, shouldIgnoreJid:()=>false });
+function getSenderJid(message) {
+  return message.key.participant ||
+    message.key.remoteJid ||
+    '';
+}
+
+function getGroupData(groupJid) {
+  if (!db.grupos[groupJid]) {
+    db.grupos[groupJid] = {
+      bienvenidas: true,
+      admins: [],
+      advertencias: {},
+      bloqueado: false
+    };
+  }
+
+  return db.grupos[groupJid];
+}
+
+function getUserMoney(jid) {
+  if (!db.dinero[jid]) {
+    db.dinero[jid] = 100;
+  }
+
+  return db.dinero[jid];
+}
+
+async function startBot() {
+  const { state, saveCreds } =
+    await useMultiFileAuthState('./auth_info');
+
+  sock = makeWASocket({
+    auth: state,
+    logger: P({ level: 'silent' }),
+    printQRInTerminal: false,
+    browser: ['GreenvilleNight FF', 'Chrome', '1.0.0']
+  });
+
   sock.ev.on('creds.update', saveCreds);
-  sock.ev.on('connection.update', async (u)=>{
-    const { connection, lastDisconnect, qr } = u;
-    if(qr) qrCodeData = await qrcode.toDataURL(qr);
-    if(connection==='close'){ isConnected=false; qrCodeData=null; if(lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) startBot(); }
-    else if(connection==='open'){ isConnected=true; qrCodeData=null; console.log('🌃 GreenvilleNight FF BOT CONECTADO ✅ - ID: '+sock.user.id); }
+
+  sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect, qr } = update;
+
+    if (qr) {
+      qrCodeData = qr;
+      console.log('Nuevo QR disponible en la página web.');
+    }
+
+    if (connection === 'open') {
+      isConnected = true;
+      qrCodeData = null;
+      console.log('GreenvilleNight FF está conectado a WhatsApp.');
+    }
+
+    if (connection === 'close') {
+      isConnected = false;
+
+      const statusCode =
+        lastDisconnect?.error?.output?.statusCode;
+
+      if (statusCode !== DisconnectReason.loggedOut) {
+        console.log('Conexión cerrada. Intentando reconectar...');
+        setTimeout(() => startBot().catch(console.error), 3000);
+      } else {
+        console.log(
+          'Sesión cerrada. Borra auth_info y vuelve a vincular WhatsApp.'
+        );
+      }
+    }
   });
 
-  sock.ev.on('messages.upsert', async ({messages})=>{
-    try{
-    const msg=messages[0];
-    if(!msg || !msg.message) return;
-    const texto=getTexto(msg);
-    if(!texto) return;
-    const jid=msg.key.remoteJid;
-    // RESPONDE EN TODOS LOS GRUPOS - SIN FILTRO
-    // No hay lista de grupos permitidos, responde en cualquiera donde este el bot
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    if (type !== 'notify') return;
 
-    // FIX: Si el mensaje es mio (fromMe) usar mi propio ID como userJid para que me responda
-    let userJid=msg.key.participant || msg.key.remoteJid;
-    if(msg.key.fromMe){
-      userJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-      console.log('📩 MENSAJE MIO DETECTADO: '+texto);
-    }
-    const pushName=msg.pushName||'Enmanuel';
-    console.log(`📩 ${pushName} (${userJid}): ${texto} | fromMe=${msg.key.fromMe} | jid=${jid}`);
+    for (const message of messages) {
+      try {
+        if (!message.message || message.key.fromMe) continue;
 
-    if(texto.startsWith('verif_')){
-        const userId=texto.split('_')[2]; const esSi=texto.startsWith('verif_si_'); const datos=Array.from(verificaciones.values()).find(v=>v.userId==userId); if(!datos) return;
-        if(!esSi) return sock.sendMessage(jid,{text:'❌ Cancelado'});
-        await sock.sendMessage(jid,{text:`⏳ @${pushName} tienes 6 MIN para cambiarte accesorio en Roblox`,mentions:[userJid]});
-        setTimeout(async()=>{ try{ const t2=await axios.get(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${userId}&size=720x720&format=Png&isCircular=false`); if(t2.data.data[0].imageUrl!==datos.avatarInicial){ roles[userJid]='verificado'; guardarRoles(); await sock.sendMessage(jid,{text:`✅ VERIFICADO - Bienvenido @${pushName} rol verificado dado`,mentions:[userJid]}); }else{ await sock.sendMessage(jid,{text:`❌ FALLÓ @${pushName}`,mentions:[userJid]}); } }catch{} },6*60*1000); return;
-    }
+        const jid = message.key.remoteJid;
 
-    const CLAVE="Greenville2026";
-    if(texto.startsWith('!owner')){
-        const clavePuesta=texto.split(' ')[1]||"";
-        if(texto==='!owner') return sock.sendMessage(jid,{text:'🔒 Usa: !owner Greenville2026'});
-        if(clavePuesta!==CLAVE) return;
-        roles[userJid]='owner'; guardarRoles();
-        return sock.sendMessage(jid,{text:`👑 @${pushName} AHORA ERES OWNER PRINCIPAL - Ya puedo responderte siempre`,mentions:[userJid]});
-    }
+        if (!jid || jid === 'status@broadcast') continue;
 
-    if(texto==='!bot off'){ if(!tienePermiso(userJid,'admin') && !msg.key.fromMe) return; BOT_ON=false; return sock.sendMessage(jid,{text:'🔴 BOT APAGADO'}); }
-    if(texto==='!bot on'){ if(!tienePermiso(userJid,'admin') && !msg.key.fromMe) return; BOT_ON=true; return sock.sendMessage(jid,{text:'🟢 BOT PRENDIDO'}); }
-    if(!BOT_ON && !msg.key.fromMe) return;
+        const text = getText(message);
 
-    // MENU COMPLETO ARREGLADO
-    if(texto==='!menu' || texto==='!help' || texto==='!menu completo'){
-        return sock.sendMessage(jid,{text:`🌃 *GREENVILLENIGHT FF - MENU COMPLETO*
+        if (!text) continue;
 
-*✅ VERIFICACION (da verificado automatico):*
-!verificar <usuarioRoblox>
+        const sender = getSenderJid(message);
+        const isGroup = jid.endsWith('@g.us');
+        const groupData = isGroup ? getGroupData(jid) : null;
+        const prefix = '!';
+        const isCommand = text.startsWith(prefix);
 
-*💰 ECONOMIA:*
-!dinero - ver tu dinero
-!trabajar - trabajar
+        if (isGroup && groupData.bloqueado) continue;
 
-*⚠️ MODERACION:*
-!warn @usuario razon (1 warn, 3 = expulsion)
-!warns @usuario - ver warns
-!delwarn @usuario - quitar warns
+        const args = text.trim().split(/\s+/);
+        const command = args[0].slice(prefix.length).toLowerCase();
 
-*👮 ROLES DISPONIBLES:*
-owner, owner2, owner3
-propietario, propietario2, propietario3
-admin, mod, helper
-policia, ems, mecanico, verificado
-
-*🔧 STAFF:*
-!asignar @usuario <rol>
-!mirol - ver tu rol
-!roles - ver todos los roles
-!bot on/off
-
-*🔑 DUEÑO:*
-!owner Greenville2026
-
-Si no te respondo usa !owner Greenville2026 primero`});
-    }
-
-    if(texto==='!menuadmin'){
-        if(!tienePermiso(userJid,'helper') && !msg.key.fromMe) return sock.sendMessage(jid,{text:'❌ Solo staff'});
-        return sock.sendMessage(jid,{text:`🌃 MENU ADMIN - Tu rol: ${getRol(userJid)}
-!warn @user
-!warns @user
-!delwarn @user
-!asignar @user <rol>
-!bot on/off`});
-    }
-
-    if(texto.startsWith('!asignar')){
-        if(!tienePermiso(userJid,'owner3') && !msg.key.fromMe) return sock.sendMessage(jid,{text:'❌ Solo owner/owner2/owner3 - Tu rol: '+getRol(userJid)});
-        const mentioned=msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]||null;
-        const parts=texto.split(' '); const rolNuevo=parts[parts.length-1].toLowerCase();
-        let target=mentioned; if(!target){ const num=parts[1]?.replace(/[^0-9]/g,''); if(num) target=num+'@s.whatsapp.net'; }
-        if(!target||!Object.keys(PERMISOS).includes(rolNuevo)) return sock.sendMessage(jid,{text:'❌ Uso: !asignar @usuario <rol>\nRoles: '+Object.keys(PERMISOS).join(', ')});
-        if(['owner','owner2','owner3'].includes(rolNuevo) && getRol(userJid)!=='owner' && !msg.key.fromMe) return sock.sendMessage(jid,{text:'❌ Solo OWNER principal'});
-        roles[target]=rolNuevo; guardarRoles(); 
-        return sock.sendMessage(jid,{text:`✅ Rol ${rolNuevo} a @${target.split('@')[0]}`,mentions:[target]});
-    }
-
-    if(texto.startsWith('!warns') || texto.startsWith('!infractions')){
-        const mentioned=msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]||null;
-        let target=mentioned||userJid;
-        const lista=warns[target]||[];
-        if(lista.length===0) return sock.sendMessage(jid,{text:`✅ @${target.split('@')[0]} sin warns`,mentions:[target]});
-        let txt=`⚠️ WARNS @${target.split('@')[0]} (${lista.length}/3)\n`; lista.forEach((w,i)=>{ txt+=`${i+1}. ${w.razon}\n`; });
-        return sock.sendMessage(jid,{text:txt,mentions:[target]});
-    }
-
-    if(texto.startsWith('!delwarn')){
-        if(!tienePermiso(userJid,'admin') && !msg.key.fromMe) return sock.sendMessage(jid,{text:'❌ Solo admin'});
-        const mentioned=msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]||null;
-        let target=mentioned; if(!target){ const num=texto.split(' ')[1]?.replace(/[^0-9]/g,''); if(num) target=num+'@s.whatsapp.net'; }
-        if(!target) return sock.sendMessage(jid,{text:'Uso: !delwarn @usuario'});
-        warns[target]=[]; guardarWarns();
-        return sock.sendMessage(jid,{text:`✅ Warns borrados a @${target.split('@')[0]}`,mentions:[target]});
-    }
-
-    if(texto==='!warn' || texto.startsWith('!warn ')){
-        if(!tienePermiso(userJid,'mod') && !msg.key.fromMe) return sock.sendMessage(jid,{text:'❌ Solo mod/admin - Tu rol: '+getRol(userJid)});
-        const mentioned=msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]||null;
-        const parts=texto.split(' ');
-        let target=mentioned; if(!target){ const num=parts[1]?.replace(/[^0-9]/g,''); if(num) target=num+'@s.whatsapp.net'; }
-        if(!target) return sock.sendMessage(jid,{text:'❌ Uso: !warn @usuario razon'});
-        if(esOwnerProtegido(target)) return sock.sendMessage(jid,{text:'❌ No puedes dar warn a OWNER/PROPIETARIO'});
-        const razon=parts.slice(2).join(' ')||'Sin razon';
-        if(!warns[target]) warns[target]=[];
-        warns[target].push({razon, by:userJid, fecha:new Date().toLocaleDateString()});
-        guardarWarns();
-        const total=warns[target].length;
-        let msgWarn=`⚠️ WARN ${total}/3 @${target.split('@')[0]} Razon: ${razon}`;
-        if(total>=3){
-            msgWarn+=`\n🚨 3/3 - EXPULSANDO`;
-            await sock.sendMessage(jid,{text:msgWarn,mentions:[target]});
-            try{ await sock.groupParticipantsUpdate(jid,[target],'remove'); await sock.sendMessage(jid,{text:`✅ @${target.split('@')[0]} expulsado`,mentions:[target]}); }catch{ await sock.sendMessage(jid,{text:`⚠️ Hazme admin para expulsar`}); }
-            warns[target]=[]; guardarWarns(); return;
+        async function reply(txt) {
+          await sock.sendMessage(jid, { text: txt }, { quoted: message });
         }
-        return sock.sendMessage(jid,{text:msgWarn,mentions:[target]});
+
+        if (!isCommand) {
+          if (isGroup && groupData.bienvenidas === false) {
+            continue;
+          }
+
+          continue;
+        }
+
+        if (db.comandos[command]) {
+          await reply(
+            db.comandos[command].replaceAll('{usuario}', '@' + sender.split('@')[0])
+          );
+          continue;
+        }
+
+        switch (command) {
+          case 'menu':
+          case 'help':
+            await reply(
+`🔥 *GREENVILLENIGHT FF*
+
+📌 *GENERAL*
+!menu
+!ping
+!info
+!estado
+!creador
+
+💰 *ECONOMÍA*
+!dinero
+!diario
+!trabajar
+!pagar @persona cantidad
+
+🎮 *JUEGOS*
+!dado
+!moneda
+!perfil
+
+👥 *GRUPO*
+!grupo
+!admins
+!id
+!link
+
+🛠️ *ADMINISTRACIÓN*
+!advertir @persona
+!advertencias
+!limpiaradvertencias @persona
+!bienvenida on/off
+!bloquear
+!desbloquear
+
+⚙️ *PERSONALIZACIÓN*
+!crear nombre | respuesta
+!comandos
+!borrarcomando nombre`
+            );
+            break;
+
+          case 'ping':
+            await reply('🏓 Pong! GreenvilleNight FF está activo.');
+            break;
+
+          case 'info':
+            await reply(
+              '🔥 GreenvilleNight FF\nBot de WhatsApp para grupos.\nUsa !menu para ver los comandos.'
+            );
+            break;
+
+          case 'estado':
+            await reply(
+              `🟢 Bot activo\nConexión: ${isConnected ? 'Conectado' : 'Desconectado'}`
+            );
+            break;
+
+          case 'creador':
+            await reply('👑 Creador: GreenvilleNight FF');
+            break;
+
+          case 'dinero':
+            await reply(`💵 Tienes $${getUserMoney(sender)}.`);
+            saveData();
+            break;
+
+          case 'diario': {
+            const today = new Date().toISOString().slice(0, 10);
+
+            if (!db.niveles[sender]) db.niveles[sender] = {};
+
+            if (db.niveles[sender].diario === today) {
+              await reply('⏳ Ya reclamaste tu recompensa diaria.');
+              break;
+            }
+
+            db.niveles[sender].diario = today;
+            db.dinero[sender] = getUserMoney(sender) + 250;
+            saveData();
+
+            await reply('🎁 Recibiste $250 de recompensa diaria.');
+            break;
+          }
+
+          case 'trabajar': {
+            const cantidad = Math.floor(Math.random() * 151) + 50;
+
+            db.dinero[sender] = getUserMoney(sender) + cantidad;
+            saveData();
+
+            await reply(`🧰 Trabajaste y ganaste $${cantidad}.`);
+            break;
+          }
+
+          case 'pagar': {
+            const mentioned = message.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+            const target = mentioned[0];
+            const amount = Number(args[args.length - 1]);
+
+            if (!target || !Number.isInteger(amount) || amount <= 0) {
+              await reply('Uso: !pagar @persona cantidad');
+              break;
+            }
+
+            const balance = getUserMoney(sender);
+
+            if (balance < amount) {
+              await reply('❌ No tienes suficiente dinero.');
+              break;
+            }
+
+            db.dinero[sender] = balance - amount;
+            db.dinero[target] = getUserMoney(target) + amount;
+            saveData();
+
+            await reply(`💸 Transferiste $${amount} a @${target.split('@')[0]}.`);
+            break;
+          }
+
+          case 'dado': {
+            const number = Math.floor(Math.random() * 6) + 1;
+            await reply(`🎲 Sacaste un ${number}.`);
+            break;
+          }
+
+          case 'moneda':
+            await reply(Math.random() < 0.5 ? '🪙 Cara' : '🪙 Cruz');
+            break;
+
+          case 'perfil':
+            await reply(
+              `👤 PERFIL\nUsuario: @${sender.split('@')[0]}\nDinero: $${getUserMoney(sender)}`
+            );
+            break;
+
+          case 'grupo':
+            if (!isGroup) {
+              await reply('Este comando solo funciona en grupos.');
+              break;
+            }
+
+            await reply(`👥 ID del grupo:\n${jid}`);
+            break;
+
+          case 'id':
+            await reply(`🆔 Tu ID:\n${sender}\nGrupo/chat:\n${jid}`);
+            break;
+
+          case 'admins': {
+            if (!isGroup) {
+              await reply('Este comando solo funciona en grupos.');
+              break;
+            }
+
+            const metadata = await sock.groupMetadata(jid);
+            const admins = metadata.participants.filter(
+              p => p.admin === 'admin' || p.admin === 'superadmin'
+            );
+
+            await reply(
+              '👑 ADMINISTRADORES\n' +
+              (admins.length
+                ? admins.map(p => '@' + p.id.split('@')[0]).join('\n')
+                : 'No se encontraron administradores.')
+            );
+            break;
+          }
+
+          case 'link': {
+            if (!isGroup) {
+              await reply('Este comando solo funciona en grupos.');
+              break;
+            }
+
+            try {
+              const metadata = await sock.groupMetadata(jid);
+              const botJid = sock.user.id;
+              const botParticipant = metadata.participants.find(
+                p => p.id === botJid
+              );
+
+              if (
+                !botParticipant ||
+                (botParticipant.admin !== 'admin' &&
+                 botParticipant.admin !== 'superadmin')
+              ) {
+                await reply('❌ Necesito ser administrador para obtener el enlace.');
+                break;
+              }
+
+              const code = await sock.groupInviteCode(jid);
+              await reply(`🔗 Enlace del grupo:\nhttps://chat.whatsapp.com/${code}`);
+            } catch {
+              await reply('❌ No pude obtener el enlace del grupo.');
+            }
+
+            break;
+          }
+
+          case 'advertir': {
+            if (!isGroup) {
+              await reply('Este comando solo funciona en grupos.');
+              break;
+            }
+
+            const metadata = await sock.groupMetadata(jid);
+            const botJid = sock.user.id;
+            const botParticipant = metadata.participants.find(
+              p => p.id === botJid
+            );
+
+            if (
+              !botParticipant ||
+              (botParticipant.admin !== 'admin' &&
+               botParticipant.admin !== 'superadmin')
+            ) {
+              await reply('❌ El bot necesita ser administrador.');
+              break;
+            }
+
+            const mentioned = message.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+            const target = mentioned[0];
+
+            if (!target) {
+              await reply('Uso: !advertir @persona');
+              break;
+            }
+
+            if (!groupData.advertencias[target]) {
+              groupData.advertencias[target] = 0;
+            }
+
+            groupData.advertencias[target]++;
+            saveData();
+
+            await reply(
+              `⚠️ @${target.split('@')[0]} recibió una advertencia.\nTotal: ${groupData.advertencias[target]}`
+            );
+            break;
+          }
+
+          case 'advertencias': {
+            const warnings = groupData?.advertencias || {};
+
+            await reply(
+              '⚠️ ADVERTENCIAS\n' +
+              (Object.keys(warnings).length
+                ? Object.entries(warnings)
+                    .map(([user, count]) => `@${user.split('@')[0]}: ${count}`)
+                    .join('\n')
+                : 'No hay advertencias.')
+            );
+            break;
+          }
+
+          case 'limpiaradvertencias': {
+            if (!isGroup) {
+              await reply('Este comando solo funciona en grupos.');
+              break;
+            }
+
+            const mentioned = message.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+            const target = mentioned[0];
+
+            if (!target) {
+              await reply('Uso: !limpiaradvertencias @persona');
+              break;
+            }
+
+            groupData.advertencias[target] = 0;
+            saveData();
+
+            await reply('✅ Advertencias reiniciadas.');
+            break;
+          }
+
+          case 'bienvenida': {
+            if (!isGroup) {
+              await reply('Este comando solo funciona en grupos.');
+              break;
+            }
+
+            const option = args[1]?.toLowerCase();
+
+            if (option !== 'on' && option !== 'off') {
+              await reply('Uso: !bienvenida on o !bienvenida off');
+              break;
+            }
+
+            groupData.bienvenidas = option === 'on';
+            saveData();
+
+            await reply(`✅ Bienvenida ${option === 'on' ? 'activada' : 'desactivada'}.`);
+            break;
+          }
+
+          case 'bloquear':
+            if (!isGroup) {
+              await reply('Este comando solo funciona en grupos.');
+              break;
+            }
+
+            groupData.bloqueado = true;
+            saveData();
+            await reply('🔒 Bot bloqueado para este grupo.');
+            break;
+
+          case 'desbloquear':
+            if (!isGroup) {
+              await reply('Este comando solo funciona en grupos.');
+              break;
+            }
+
+            groupData.bloqueado = false;
+            saveData();
+            await reply('🔓 Bot desbloqueado para este grupo.');
+            break;
+
+          case 'crear': {
+            const input = text.slice('!crear'.length).trim();
+            const parts = input.split('|');
+
+            if (parts.length < 2) {
+              await reply('Uso: !crear nombre | respuesta');
+              break;
+            }
+
+            const name = parts.shift().trim().toLowerCase();
+            const response = parts.join('|').trim();
+
+            if (!/^[a-z0-9_-]{2,30}$/.test(name) || !response) {
+              await reply('❌ Nombre inválido o respuesta vacía.');
+              break;
+            }
+
+            db.comandos[name] = response;
+            saveData();
+
+            await reply(`✅ Comando !${name} creado.`);
+            break;
+          }
+
+          case 'comandos':
+            await reply(
+              '📜 COMANDOS PERSONALIZADOS\n' +
+              (Object.keys(db.comandos).length
+                ? Object.keys(db.comandos).map(c => '!' + c).join('\n')
+                : 'No hay comandos personalizados.')
+            );
+            break;
+
+          case 'borrarcomando': {
+            const name = args[1]?.toLowerCase();
+
+            if (!name || !db.comandos[name]) {
+              await reply('Uso: !borrarcomando nombre');
+              break;
+            }
+
+            delete db.comandos[name];
+            saveData();
+
+            await reply(`🗑️ Comando !${name} eliminado.`);
+            break;
+          }
+
+          default:
+            await reply('❓ Comando desconocido. Escribe !menu.');
+        }
+      } catch (error) {
+        console.error('Error procesando mensaje:', error);
+      }
     }
-
-    if(texto==='!mirol') return sock.sendMessage(jid,{text:`🎖️ Tu rol: *${getRol(userJid)}*`,mentions:[userJid]});
-    if(texto==='!roles'){ let l='📋 ROLES\n'; for(const [k,v] of Object.entries(roles)) l+=`@${k.split('@')[0]} - ${v}\n`; return sock.sendMessage(jid,{text:l||'Sin roles',mentions:Object.keys(roles)}); }
-
-    if(texto.startsWith('!verificar')){
-        const username=texto.split(' ')[1]; if(!username) return sock.sendMessage(jid,{text:'Uso: !verificar <usuarioRoblox>'});
-        try{
-            const r1=await axios.post('https://users.roblox.com/v1/usernames/users',{usernames:[username],excludeBannedUsers:true});
-            if(!r1.data.data.length) return sock.sendMessage(jid,{text:`❌ No encontré ${username}`});
-            const user=r1.data.data[0]; const thumb=await axios.get(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${user.id}&size=720x720&format=Png&isCircular=false`);
-            const avatarUrl=thumb.data.data[0].imageUrl; const info=await axios.get(`https://users.roblox.com/v1/users/${user.id}`);
-            verificaciones.set(userJid,{userId:user.id,avatarInicial:avatarUrl,username:user.name});
-            const buttons=[{buttonId:`verif_si_${user.id}`,buttonText:{displayText:'✅ Si es mi cuenta'},type:1},{buttonId:`verif_no_${user.id}`,buttonText:{displayText:'❌ No es'},type:1}];
-            await sock.sendMessage(jid,{image:{url:avatarUrl},caption:`🌃 GreenvilleNight FF\n👤 ${info.data.name}`,buttons:buttons,headerType:4});
-        }catch{ sock.sendMessage(jid,{text:'Error API Roblox'}); }
-    }
-
-    }catch(e){ console.log('Error:', e.message); }
   });
 }
-startBot();
+
+startBot().catch(error => {
+  console.error('No se pudo iniciar el bot:', error);
+});
