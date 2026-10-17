@@ -1,663 +1,621 @@
-
+const express = require('express');
+const QRCode = require('qrcode');
+const {
+  default: makeWASocket,
+  useMultiFileAuthState,
+  DisconnectReason
+} = require('@whiskeysockets/baileys');
+const P = require('pino');
 const fs = require('fs');
 const path = require('path');
 
-// ===== CONFIGURACIÓN =====
-// Define OWNER_JID en las variables de entorno.
-// Ejemplo: 1234567890@s.whatsapp.net
-const OWNER_JID = process.env.OWNER_JID || '';
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-const DATA = path.join(__dirname, 'datos_bot');
-if (!fs.existsSync(DATA)) fs.mkdirSync(DATA, { recursive: true });
+let qrCodeData = null;
+let isConnected = false;
+let sock = null;
 
-function leerArchivo(nombre, inicial) {
-    const archivo = path.join(DATA, nombre);
+const DATA_DIR = './data';
+const DATA_FILE = path.join(DATA_DIR, 'bot.json');
 
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+function loadData() {
+  try {
+    if (fs.existsSync(DATA_FILE)) {
+      return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+    }
+  } catch (error) {
+    console.error('Error leyendo datos:', error.message);
+  }
+
+  return {
+    grupos: {},
+    comandos: {},
+    dinero: {},
+    niveles: {}
+  };
+}
+
+let db = loadData();
+
+function saveData() {
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
+  } catch (error) {
+    console.error('Error guardando datos:', error.message);
+  }
+}
+
+app.get('/', async (req, res) => {
+  if (isConnected) {
+    return res.send(`
+      <html>
+        <head><meta name="viewport" content="width=device-width"></head>
+        <body style="background:#080808;color:#00ff88;text-align:center;font-family:Arial;padding:35px">
+          <h1>🟢 GreenvilleNight FF</h1>
+          <h2>BOT CONECTADO</h2>
+          <p>El servidor está funcionando.</p>
+        </body>
+      </html>
+    `);
+  }
+
+  if (qrCodeData) {
     try {
-        if (fs.existsSync(archivo)) {
-            return JSON.parse(fs.readFileSync(archivo, 'utf8'));
-        }
+      const qr = await QRCode.toDataURL(qrCodeData);
+
+      return res.send(`
+        <html>
+          <head><meta name="viewport" content="width=device-width"></head>
+          <body style="background:#080808;color:white;text-align:center;font-family:Arial;padding:20px">
+            <h1>🔥 GreenvilleNight FF</h1>
+            <h3>Escanea el QR desde WhatsApp</h3>
+            <img src="${qr}" style="max-width:100%;width:300px">
+            <p>WhatsApp → Dispositivos vinculados → Vincular dispositivo</p>
+          </body>
+        </html>
+      `);
     } catch (error) {
-        console.error(`Error leyendo ${nombre}:`, error.message);
+      return res.status(500).send('No se pudo generar el QR.');
+    }
+  }
+
+  res.send(`
+    <html>
+      <body style="background:#080808;color:white;text-align:center;font-family:Arial;padding:35px">
+        <h1>🔥 GreenvilleNight FF</h1>
+        <p>Esperando el código QR de WhatsApp...</p>
+        <p>Actualiza esta página en unos segundos.</p>
+      </body>
+    </html>
+  `);
+});
+
+app.get('/status', (req, res) => {
+  res.json({
+    bot: 'GreenvilleNight FF',
+    connected: isConnected,
+    qrAvailable: Boolean(qrCodeData)
+  });
+});
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Servidor activo en puerto ${PORT}`);
+});
+
+function getText(message) {
+  const m = message.message || {};
+
+  return (
+    m.conversation ||
+    m.extendedTextMessage?.text ||
+    m.imageMessage?.caption ||
+    m.videoMessage?.caption ||
+    m.documentMessage?.caption ||
+    ''
+  ).trim();
+}
+
+function getSenderJid(message) {
+  return message.key.participant ||
+    message.key.remoteJid ||
+    '';
+}
+
+function getGroupData(groupJid) {
+  if (!db.grupos[groupJid]) {
+    db.grupos[groupJid] = {
+      bienvenidas: true,
+      admins: [],
+      advertencias: {},
+      bloqueado: false
+    };
+  }
+
+  return db.grupos[groupJid];
+}
+
+function getUserMoney(jid) {
+  if (!db.dinero[jid]) {
+    db.dinero[jid] = 100;
+  }
+
+  return db.dinero[jid];
+}
+
+async function startBot() {
+  const { state, saveCreds } =
+    await useMultiFileAuthState('./auth_info');
+
+  sock = makeWASocket({
+    auth: state,
+    logger: P({ level: 'silent' }),
+    printQRInTerminal: false,
+    browser: ['GreenvilleNight FF', 'Chrome', '1.0.0']
+  });
+
+  sock.ev.on('creds.update', saveCreds);
+
+  sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect, qr } = update;
+
+    if (qr) {
+      qrCodeData = qr;
+      console.log('Nuevo QR disponible en la página web.');
     }
 
-    fs.writeFileSync(archivo, JSON.stringify(inicial, null, 2));
-    return inicial;
-}
-
-function guardarArchivo(nombre, datos) {
-    fs.writeFileSync(
-        path.join(DATA, nombre),
-        JSON.stringify(datos, null, 2)
-    );
-}
-
-const roles = leerArchivo('roles.json', {});
-const economia = leerArchivo('economia.json', {});
-const avisos = leerArchivo('avisos.json', {});
-
-const niveles = {
-    usuario: 0,
-    verificado: 1,
-    helper: 2,
-    mod: 3,
-    admin: 4,
-    'co-owner': 5,
-    owner: 6
-};
-
-function numero(jid) {
-    return String(jid || '').split('@')[0].split(':')[0];
-}
-
-function obtenerRol(jid) {
-    if (OWNER_JID && numero(jid) === numero(OWNER_JID)) {
-        return 'owner';
+    if (connection === 'open') {
+      isConnected = true;
+      qrCodeData = null;
+      console.log('GreenvilleNight FF está conectado a WhatsApp.');
     }
 
-    return roles[jid] || 'usuario';
-}
-
-function tieneRol(jid, minimo) {
-    return (niveles[obtenerRol(jid)] ?? 0) >=
-        (niveles[minimo] ?? 999);
-}
-
-function usuarioEco(jid) {
-    if (!economia[jid]) {
-        economia[jid] = {
-            dinero: 1000,
-            banco: 0,
-            inventario: {},
-            ultimoDaily: 0
-        };
-    }
-
-    const u = economia[jid];
-    u.dinero = Number(u.dinero) || 0;
-    u.banco = Number(u.banco) || 0;
-    u.inventario ||= {};
-    u.ultimoDaily ||= 0;
-
-    return u;
-}
-
-function guardarEconomia() {
-    guardarArchivo('economia.json', economia);
-}
-
-function dinero(valor) {
-    return '$' + Math.floor(valor).toLocaleString('en-US');
-}
-
-function textoMensaje(msg) {
-    const m = msg.message || {};
-
-    return (
-        m.conversation ||
-        m.extendedTextMessage?.text ||
-        m.imageMessage?.caption ||
-        m.videoMessage?.caption ||
-        m.documentMessage?.caption ||
-        ''
-    ).trim();
-}
-
-function jidRemitente(msg) {
-    return msg.key.participant ||
-        msg.key.remoteJid;
-}
-
-function mencionados(msg) {
-    return msg.message?.extendedTextMessage
-        ?.contextInfo?.mentionedJid || [];
-}
-
-async function responder(sock, chat, texto, opciones = {}) {
-    return sock.sendMessage(chat, {
-        text: texto,
-        ...opciones
-    });
-}
-
-async function esAdminGrupo(sock, chat, jid) {
-    if (!chat.endsWith('@g.us')) return false;
-
-    const metadata = await sock.groupMetadata(chat);
-    const participante = metadata.participants.find(
-        p => numero(p.id) === numero(jid)
-    );
-
-    return Boolean(participante?.admin);
-}
-
-async function ejecutarComando(sock, msg) {
-    const chat = msg.key.remoteJid;
-    const autor = jidRemitente(msg);
-    const texto = textoMensaje(msg);
-
-    if (!texto.startsWith('!')) return;
-
-    const partes = texto.slice(1).trim().split(/\s+/);
-    const comando = (partes.shift() || '').toLowerCase();
-    const args = partes;
-    const menciones = mencionados(msg);
-    const grupo = chat.endsWith('@g.us');
-
-    const responderAqui = t => responder(sock, chat, t);
-    const guardarRoles = () =>
-        guardarArchivo('roles.json', roles);
-
-    try {
-        switch (comando) {
-            // ===== GENERAL =====
-
-            case 'menu':
-            case 'ayuda':
-                return responderAqui(
-`╭━━━ *GREENVILLENIGHT FF* ━━━╮
-┃ 🤖 !ping
-┃ 👤 !perfil
-┃ 🎭 !mirol
-┃ 📋 !roles
-┃ 💰 !dinero
-┃ 🎁 !daily
-┃ 🛠️ !trabajar
-┃ 🏦 !depositar cantidad
-┃ 💸 !retirar cantidad
-┃ 🤝 !pagar cantidad @usuario
-┃ 🥷 !robar @usuario
-┃ 🛒 !tienda
-┃ 🛍️ !comprar artículo
-┃ 🎒 !inventario
-┃ 🏆 !top
-┃ ⚠️ !warn @usuario motivo
-┃ 📄 !warns @usuario
-┃ 👢 !kick @usuario
-┃ 📢 !todos mensaje
-┃ 🔒 !cerrar
-┃ 🔓 !abrir
-┃ 🔗 !link
-┃ 🏅 !asignar @usuario rol
-╰━━━━━━━━━━━━━━━━━━━━━━╯`
-                );
-
-            case 'ping':
-                return responderAqui('🏓 Pong! GreenvilleNight FF está activo.');
-
-            case 'perfil': {
-                const u = usuarioEco(autor);
-                guardarEconomia();
-
-                return responderAqui(
-`👤 *PERFIL*
-Número: ${numero(autor)}
-Rol: ${obtenerRol(autor)}
-Dinero: ${dinero(u.dinero)}
-Banco: ${dinero(u.banco)}`
-                );
-            }
-
-            case 'mirol':
-                return responderAqui(
-                    `🎭 Tu rol es: *${obtenerRol(autor)}*`
-                );
-
-            case 'roles':
-                return responderAqui(
-                    '📋 *ROLES DISPONIBLES*\n' +
-                    Object.entries(niveles)
-                        .map(([rol, nivel]) => `${nivel}. ${rol}`)
-                        .join('\n')
-                );
-
-            // ===== ECONOMÍA =====
-
-            case 'dinero':
-            case 'balance': {
-                const u = usuarioEco(autor);
-                guardarEconomia();
-
-                return responderAqui(
-                    `💰 Efectivo: ${dinero(u.dinero)}\n🏦 Banco: ${dinero(u.banco)}`
-                );
-            }
-
-            case 'daily': {
-                const u = usuarioEco(autor);
-                const ahora = Date.now();
-                const espera = 24 * 60 * 60 * 1000;
-                const restante = espera - (ahora - u.ultimoDaily);
-
-                if (restante > 0) {
-                    const horas = Math.ceil(restante / 3600000);
-                    return responderAqui(
-                        `⏳ Ya reclamaste tu recompensa. Vuelve en ${horas} hora(s).`
-                    );
-                }
-
-                const premio = 1000 + Math.floor(Math.random() * 4001);
-                u.dinero += premio;
-                u.ultimoDaily = ahora;
-                guardarEconomia();
-
-                return responderAqui(
-                    `🎁 Recibiste ${dinero(premio)}. ¡Vuelve mañana!`
-                );
-            }
-
-            case 'trabajar': {
-                const u = usuarioEco(autor);
-                const trabajos = [
-                    'mecánico',
-                    'taxista',
-                    'repartidor',
-                    'guardia de seguridad',
-                    'conductor'
-                ];
-
-                const trabajo =
-                    trabajos[Math.floor(Math.random() * trabajos.length)];
-                const premio = 200 + Math.floor(Math.random() * 801);
-
-                u.dinero += premio;
-                guardarEconomia();
-
-                return responderAqui(
-                    `🛠️ Trabajaste como ${trabajo} y ganaste ${dinero(premio)}.`
-                );
-            }
-
-            case 'depositar': {
-                const u = usuarioEco(autor);
-                const cantidad = Number(args[0]);
-
-                if (!Number.isSafeInteger(cantidad) || cantidad <= 0) {
-                    return responderAqui('Uso: !depositar 500');
-                }
-
-                if (cantidad > u.dinero) {
-                    return responderAqui('❌ No tienes suficiente efectivo.');
-                }
-
-                u.dinero -= cantidad;
-                u.banco += cantidad;
-                guardarEconomia();
-
-                return responderAqui(
-                    `🏦 Depositaste ${dinero(cantidad)}.`
-                );
-            }
-
-            case 'retirar': {
-                const u = usuarioEco(autor);
-                const cantidad = Number(args[0]);
-
-                if (!Number.isSafeInteger(cantidad) || cantidad <= 0) {
-                    return responderAqui('Uso: !retirar 500');
-                }
-
-                if (cantidad > u.banco) {
-                    return responderAqui('❌ No tienes suficiente dinero en el banco.');
-                }
-
-                u.banco -= cantidad;
-                u.dinero += cantidad;
-                guardarEconomia();
-
-                return responderAqui(
-                    `💵 Retiraste ${dinero(cantidad)}.`
-                );
-            }
-
-            case 'pagar': {
-                const objetivo = menciones[0];
-                const cantidad = Number(args.find(
-                    a => /^\d+$/.test(a)
-                ));
-
-                if (!objetivo) {
-                    return responderAqui('Uso: !pagar 500 @usuario');
-                }
-
-                if (numero(objetivo) === numero(autor)) {
-                    return responderAqui('❌ No puedes pagarte a ti mismo.');
-                }
-
-                if (!Number.isSafeInteger(cantidad) || cantidad <= 0) {
-                    return responderAqui('❌ Indica una cantidad válida.');
-                }
-
-                const emisor = usuarioEco(autor);
-                const receptor = usuarioEco(objetivo);
-
-                if (cantidad > emisor.dinero) {
-                    return responderAqui('❌ No tienes suficiente dinero.');
-                }
-
-                emisor.dinero -= cantidad;
-                receptor.dinero += cantidad;
-                guardarEconomia();
-
-                return responderAqui(
-                    `🤝 Enviaste ${dinero(cantidad)} a @${numero(objetivo)}.`,
-                    { mentions: [objetivo] }
-                );
-            }
-
-            case 'robar': {
-                const objetivo = menciones[0];
-
-                if (!objetivo) {
-                    return responderAqui('Uso: !robar @usuario');
-                }
-
-                if (numero(objetivo) === numero(autor)) {
-                    return responderAqui('❌ No puedes robarte a ti mismo.');
-                }
-
-                const ladron = usuarioEco(autor);
-                const victima = usuarioEco(objetivo);
-
-                if (victima.dinero < 100) {
-                    return responderAqui('😅 Esa persona no tiene suficiente efectivo.');
-                }
-
-                if (Math.random() < 0.5) {
-                    const botin = Math.min(
-                        victima.dinero,
-                        100 + Math.floor(Math.random() * 401)
-                    );
-
-                    victima.dinero -= botin;
-                    ladron.dinero += botin;
-                    guardarEconomia();
-
-                    return responderAqui(
-                        `🥷 ¡Robo exitoso! Ganaste ${dinero(botin)}.`
-                    );
-                }
-
-                const multa = Math.min(
-                    ladron.dinero,
-                    100 + Math.floor(Math.random() * 201)
-                );
-
-                ladron.dinero -= multa;
-                guardarEconomia();
-
-                return responderAqui(
-                    `🚔 Te atraparon. Pagaste una multa de ${dinero(multa)}.`
-                );
-            }
-
-            case 'tienda':
-                return responderAqui(
-`🛒 *TIENDA*
-1. teléfono — 500
-2. coche — 5000
-3. casa — 15000
-
-Usa !comprar teléfono
-Usa !comprar coche
-Usa !comprar casa`
-                );
-
-            case 'comprar': {
-                const articulos = {
-                    telefono: 500,
-                    coche: 5000,
-                    casa: 15000
-                };
-
-                const articulo = (args[0] || '').toLowerCase();
-                const precio = articulos[articulo];
-
-                if (!precio) {
-                    return responderAqui(
-                        '❌ Artículo desconocido. Usa !tienda.'
-                    );
-                }
-
-                const u = usuarioEco(autor);
-
-                if (u.dinero < precio) {
-                    return responderAqui('❌ No tienes suficiente dinero.');
-                }
-
-                u.dinero -= precio;
-                u.inventario[articulo] =
-                    (u.inventario[articulo] || 0) + 1;
-
-                guardarEconomia();
-
-                return responderAqui(
-                    `🛍️ Compraste ${articulo} por ${dinero(precio)}.`
-                );
-            }
-
-            case 'inventario': {
-                const u = usuarioEco(autor);
-                const items = Object.entries(u.inventario);
-
-                guardarEconomia();
-
-                return responderAqui(
-                    items.length
-                        ? '🎒 *TU INVENTARIO*\n' +
-                          items.map(([item, cantidad]) =>
-                              `• ${item}: ${cantidad}`
-                          ).join('\n')
-                        : '🎒 Tu inventario está vacío.'
-                );
-            }
-
-            case 'top': {
-                const lista = Object.entries(economia)
-                    .sort((a, b) =>
-                        (Number(b[1].dinero) || 0) -
-                        (Number(a[1].dinero) || 0)
-                    )
-                    .slice(0, 10);
-
-                if (!lista.length) {
-                    return responderAqui('Todavía no hay jugadores en el ranking.');
-                }
-
-                return responderAqui(
-                    '🏆 *TOP 10 RICOS*\n' +
-                    lista.map(([jid, u], i) =>
-                        `${i + 1}. ${numero(jid)} — ${dinero(u.dinero || 0)}`
-                    ).join('\n')
-                );
-            }
-
-            // ===== ROLES PERSONALIZADOS =====
-
-            case 'asignar': {
-                if (!tieneRol(autor, 'owner')) {
-                    return responderAqui('⛔ Solo el propietario puede asignar roles.');
-                }
-
-                const objetivo = menciones[0];
-                const rol = (args.find(a =>
-                    Object.prototype.hasOwnProperty.call(niveles, a.toLowerCase())
-                ) || '').toLowerCase();
-
-                if (!objetivo || !rol) {
-                    return responderAqui(
-                        'Uso: !asignar @usuario admin\nRoles: verificado, helper, mod, admin, co-owner, owner'
-                    );
-                }
-
-                if (rol === 'owner' && (!OWNER_JID ||
-                    numero(autor) !== numero(OWNER_JID))) {
-                    return responderAqui('⛔ No puedes asignar el rol owner.');
-                }
-
-                if (numero(objetivo) === numero(autor) && rol !== 'usuario') {
-                    return responderAqui('❌ No puedes asignarte ese rol a ti mismo.');
-                }
-
-                roles[objetivo] = rol;
-                guardarRoles();
-
-                return responderAqui(
-                    `✅ Rol *${rol}* asignado a @${numero(objetivo)}.`,
-                    { mentions: [objetivo] }
-                );
-            }
-
-            // ===== MODERACIÓN =====
-
-            case 'kick': {
-                if (!grupo) {
-                    return responderAqui('Este comando solo funciona en grupos.');
-                }
-
-                if (!tieneRol(autor, 'mod') &&
-                    !(await esAdminGrupo(sock, chat, autor))) {
-                    return responderAqui('⛔ Necesitas ser moderador o administrador.');
-                }
-
-                if (!(await esAdminGrupo(sock, chat, autor))) {
-                    return responderAqui('❌ Para expulsar, también necesitas ser administrador de WhatsApp.');
-                }
-
-                const objetivo = menciones[0];
-
-                if (!objetivo) {
-                    return responderAqui('Uso: !kick @usuario');
-                }
-
-                if (numero(objetivo) === numero(autor)) {
-                    return responderAqui('❌ No puedes expulsarte a ti mismo.');
-                }
-
-                await sock.groupParticipantsUpdate(
-                    chat, [objetivo], 'remove'
-                );
-
-                return responderAqui('👢 Participante expulsado.');
-            }
-
-            case 'todos': {
-                if (!grupo) {
-                    return responderAqui('Este comando solo funciona en grupos.');
-                }
-
-                if (!tieneRol(autor, 'mod') &&
-                    !(await esAdminGrupo(sock, chat, autor))) {
-                    return responderAqui('⛔ No tienes permiso.');
-                }
-
-                const metadata = await sock.groupMetadata(chat);
-                const jids = metadata.participants.map(p => p.id);
-
-                return responder(
-                    sock,
-                    chat,
-                    `📢 *ATENCIÓN DEL GRUPO*\n${args.join(' ') || 'Todos'}\n\n` +
-                    jids.map(j => `@${numero(j)}`).join(' '),
-                    { mentions: jids }
-                );
-            }
-
-            case 'cerrar':
-            case 'abrir': {
-                if (!grupo) {
-                    return responderAqui('Este comando solo funciona en grupos.');
-                }
-
-                if (!(await esAdminGrupo(sock, chat, autor))) {
-                    return responderAqui('⛔ Necesitas ser administrador del grupo.');
-                }
-
-                await sock.groupSettingUpdate(
-                    chat,
-                    comando === 'cerrar' ? 'announcement' : 'not_announcement'
-                );
-
-                return responderAqui(
-                    comando === 'cerrar'
-                        ? '🔒 Solo los administradores pueden escribir.'
-                        : '🔓 Todos los participantes pueden escribir.'
-                );
-            }
-
-            case 'link': {
-                if (!grupo) {
-                    return responderAqui('Este comando solo funciona en grupos.');
-                }
-
-                if (!(await esAdminGrupo(sock, chat, autor))) {
-                    return responderAqui('⛔ Necesitas ser administrador del grupo.');
-                }
-
-                const codigo = await sock.groupInviteCode(chat);
-
-                return responderAqui(
-                    `🔗 Enlace de invitación:\nhttps://chat.whatsapp.com/${codigo}`
-                );
-            }
-
-            case 'warn': {
-                if (!grupo) {
-                    return responderAqui('Este comando solo funciona en grupos.');
-                }
-
-                if (!tieneRol(autor, 'mod') &&
-                    !(await esAdminGrupo(sock, chat, autor))) {
-                    return responderAqui('⛔ No tienes permiso para advertir.');
-                }
-
-                const objetivo = menciones[0];
-
-                if (!objetivo) {
-                    return responderAqui('Uso: !warn @usuario motivo');
-                }
-
-                avisos[objetivo] ||= [];
-                avisos[objetivo].push({
-                    motivo: args.filter(a => !a.startsWith('@')).join(' ') ||
-                        'Sin motivo especificado',
-                    fecha: new Date().toISOString(),
-                    grupo: chat
-                });
-
-                guardarArchivo('avisos.json', avisos);
-
-                return responderAqui(
-                    `⚠️ @${numero(objetivo)} recibió una advertencia. Total: ${avisos[objetivo].length}.`,
-                    { mentions: [objetivo] }
-                );
-            }
-
-            case 'warns': {
-                const objetivo = menciones[0] || autor;
-                const lista = (avisos[objetivo] || [])
-                    .filter(a => a.grupo === chat);
-
-                return responderAqui(
-                    lista.length
-                        ? `📄 *ADVERTENCIAS DE ${numero(objetivo)}*\n` +
-                          lista.map((a, i) =>
-                              `${i + 1}. ${a.motivo} (${a.fecha.slice(0, 10)})`
-                          ).join('\n')
-                        : '✅ Este usuario no tiene advertencias registradas aquí.'
-                );
-            }
-
-            default:
-                return;
-        }
-    } catch (error) {
-        console.error(`Error en !${comando}:`, error);
-        return responderAqui(
-            '❌ Ocurrió un error al ejecutar el comando. Revisa la consola.'
+    if (connection === 'close') {
+      isConnected = false;
+
+      const statusCode =
+        lastDisconnect?.error?.output?.statusCode;
+
+      if (statusCode !== DisconnectReason.loggedOut) {
+        console.log('Conexión cerrada. Intentando reconectar...');
+        setTimeout(() => startBot().catch(console.error), 3000);
+      } else {
+        console.log(
+          'Sesión cerrada. Borra auth_info y vuelve a vincular WhatsApp.'
         );
+      }
     }
+  });
+
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    if (type !== 'notify') return;
+
+    for (const message of messages) {
+      try {
+        if (!message.message || message.key.fromMe) continue;
+
+        const jid = message.key.remoteJid;
+
+        if (!jid || jid === 'status@broadcast') continue;
+
+        const text = getText(message);
+
+        if (!text) continue;
+
+        const sender = getSenderJid(message);
+        const isGroup = jid.endsWith('@g.us');
+        const groupData = isGroup ? getGroupData(jid) : null;
+        const prefix = '!';
+        const isCommand = text.startsWith(prefix);
+
+        if (isGroup && groupData.bloqueado) continue;
+
+        const args = text.trim().split(/\s+/);
+        const command = args[0].slice(prefix.length).toLowerCase();
+
+        async function reply(txt) {
+          await sock.sendMessage(jid, { text: txt }, { quoted: message });
+        }
+
+        if (!isCommand) {
+          if (isGroup && groupData.bienvenidas === false) {
+            continue;
+          }
+
+          continue;
+        }
+
+        if (db.comandos[command]) {
+          await reply(
+            db.comandos[command].replaceAll('{usuario}', '@' + sender.split('@')[0])
+          );
+          continue;
+        }
+
+        switch (command) {
+          case 'menu':
+          case 'help':
+            await reply(
+`🔥 *GREENVILLENIGHT FF*
+
+📌 *GENERAL*
+!menu
+!ping
+!info
+!estado
+!creador
+
+💰 *ECONOMÍA*
+!dinero
+!diario
+!trabajar
+!pagar @persona cantidad
+
+🎮 *JUEGOS*
+!dado
+!moneda
+!perfil
+
+👥 *GRUPO*
+!grupo
+!admins
+!id
+!link
+
+🛠️ *ADMINISTRACIÓN*
+!advertir @persona
+!advertencias
+!limpiaradvertencias @persona
+!bienvenida on/off
+!bloquear
+!desbloquear
+
+⚙️ *PERSONALIZACIÓN*
+!crear nombre | respuesta
+!comandos
+!borrarcomando nombre`
+            );
+            break;
+
+          case 'ping':
+            await reply('🏓 Pong! GreenvilleNight FF está activo.');
+            break;
+
+          case 'info':
+            await reply(
+              '🔥 GreenvilleNight FF\nBot de WhatsApp para grupos.\nUsa !menu para ver los comandos.'
+            );
+            break;
+
+          case 'estado':
+            await reply(
+              `🟢 Bot activo\nConexión: ${isConnected ? 'Conectado' : 'Desconectado'}`
+            );
+            break;
+
+          case 'creador':
+            await reply('👑 Creador: GreenvilleNight FF');
+            break;
+
+          case 'dinero':
+            await reply(`💵 Tienes $${getUserMoney(sender)}.`);
+            saveData();
+            break;
+
+          case 'diario': {
+            const today = new Date().toISOString().slice(0, 10);
+
+            if (!db.niveles[sender]) db.niveles[sender] = {};
+
+            if (db.niveles[sender].diario === today) {
+              await reply('⏳ Ya reclamaste tu recompensa diaria.');
+              break;
+            }
+
+            db.niveles[sender].diario = today;
+            db.dinero[sender] = getUserMoney(sender) + 250;
+            saveData();
+
+            await reply('🎁 Recibiste $250 de recompensa diaria.');
+            break;
+          }
+
+          case 'trabajar': {
+            const cantidad = Math.floor(Math.random() * 151) + 50;
+
+            db.dinero[sender] = getUserMoney(sender) + cantidad;
+            saveData();
+
+            await reply(`🧰 Trabajaste y ganaste $${cantidad}.`);
+            break;
+          }
+
+          case 'pagar': {
+            const mentioned = message.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+            const target = mentioned[0];
+            const amount = Number(args[args.length - 1]);
+
+            if (!target || !Number.isInteger(amount) || amount <= 0) {
+              await reply('Uso: !pagar @persona cantidad');
+              break;
+            }
+
+            const balance = getUserMoney(sender);
+
+            if (balance < amount) {
+              await reply('❌ No tienes suficiente dinero.');
+              break;
+            }
+
+            db.dinero[sender] = balance - amount;
+            db.dinero[target] = getUserMoney(target) + amount;
+            saveData();
+
+            await reply(`💸 Transferiste $${amount} a @${target.split('@')[0]}.`);
+            break;
+          }
+
+          case 'dado': {
+            const number = Math.floor(Math.random() * 6) + 1;
+            await reply(`🎲 Sacaste un ${number}.`);
+            break;
+          }
+
+          case 'moneda':
+            await reply(Math.random() < 0.5 ? '🪙 Cara' : '🪙 Cruz');
+            break;
+
+          case 'perfil':
+            await reply(
+              `👤 PERFIL\nUsuario: @${sender.split('@')[0]}\nDinero: $${getUserMoney(sender)}`
+            );
+            break;
+
+          case 'grupo':
+            if (!isGroup) {
+              await reply('Este comando solo funciona en grupos.');
+              break;
+            }
+
+            await reply(`👥 ID del grupo:\n${jid}`);
+            break;
+
+          case 'id':
+            await reply(`🆔 Tu ID:\n${sender}\nGrupo/chat:\n${jid}`);
+            break;
+
+          case 'admins': {
+            if (!isGroup) {
+              await reply('Este comando solo funciona en grupos.');
+              break;
+            }
+
+            const metadata = await sock.groupMetadata(jid);
+            const admins = metadata.participants.filter(
+              p => p.admin === 'admin' || p.admin === 'superadmin'
+            );
+
+            await reply(
+              '👑 ADMINISTRADORES\n' +
+              (admins.length
+                ? admins.map(p => '@' + p.id.split('@')[0]).join('\n')
+                : 'No se encontraron administradores.')
+            );
+            break;
+          }
+
+          case 'link': {
+            if (!isGroup) {
+              await reply('Este comando solo funciona en grupos.');
+              break;
+            }
+
+            try {
+              const metadata = await sock.groupMetadata(jid);
+              const botJid = sock.user.id;
+              const botParticipant = metadata.participants.find(
+                p => p.id === botJid
+              );
+
+              if (
+                !botParticipant ||
+                (botParticipant.admin !== 'admin' &&
+                 botParticipant.admin !== 'superadmin')
+              ) {
+                await reply('❌ Necesito ser administrador para obtener el enlace.');
+                break;
+              }
+
+              const code = await sock.groupInviteCode(jid);
+              await reply(`🔗 Enlace del grupo:\nhttps://chat.whatsapp.com/${code}`);
+            } catch {
+              await reply('❌ No pude obtener el enlace del grupo.');
+            }
+
+            break;
+          }
+
+          case 'advertir': {
+            if (!isGroup) {
+              await reply('Este comando solo funciona en grupos.');
+              break;
+            }
+
+            const metadata = await sock.groupMetadata(jid);
+            const botJid = sock.user.id;
+            const botParticipant = metadata.participants.find(
+              p => p.id === botJid
+            );
+
+            if (
+              !botParticipant ||
+              (botParticipant.admin !== 'admin' &&
+               botParticipant.admin !== 'superadmin')
+            ) {
+              await reply('❌ El bot necesita ser administrador.');
+              break;
+            }
+
+            const mentioned = message.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+            const target = mentioned[0];
+
+            if (!target) {
+              await reply('Uso: !advertir @persona');
+              break;
+            }
+
+            if (!groupData.advertencias[target]) {
+              groupData.advertencias[target] = 0;
+            }
+
+            groupData.advertencias[target]++;
+            saveData();
+
+            await reply(
+              `⚠️ @${target.split('@')[0]} recibió una advertencia.\nTotal: ${groupData.advertencias[target]}`
+            );
+            break;
+          }
+
+          case 'advertencias': {
+            const warnings = groupData?.advertencias || {};
+
+            await reply(
+              '⚠️ ADVERTENCIAS\n' +
+              (Object.keys(warnings).length
+                ? Object.entries(warnings)
+                    .map(([user, count]) => `@${user.split('@')[0]}: ${count}`)
+                    .join('\n')
+                : 'No hay advertencias.')
+            );
+            break;
+          }
+
+          case 'limpiaradvertencias': {
+            if (!isGroup) {
+              await reply('Este comando solo funciona en grupos.');
+              break;
+            }
+
+            const mentioned = message.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+            const target = mentioned[0];
+
+            if (!target) {
+              await reply('Uso: !limpiaradvertencias @persona');
+              break;
+            }
+
+            groupData.advertencias[target] = 0;
+            saveData();
+
+            await reply('✅ Advertencias reiniciadas.');
+            break;
+          }
+
+          case 'bienvenida': {
+            if (!isGroup) {
+              await reply('Este comando solo funciona en grupos.');
+              break;
+            }
+
+            const option = args[1]?.toLowerCase();
+
+            if (option !== 'on' && option !== 'off') {
+              await reply('Uso: !bienvenida on o !bienvenida off');
+              break;
+            }
+
+            groupData.bienvenidas = option === 'on';
+            saveData();
+
+            await reply(`✅ Bienvenida ${option === 'on' ? 'activada' : 'desactivada'}.`);
+            break;
+          }
+
+          case 'bloquear':
+            if (!isGroup) {
+              await reply('Este comando solo funciona en grupos.');
+              break;
+            }
+
+            groupData.bloqueado = true;
+            saveData();
+            await reply('🔒 Bot bloqueado para este grupo.');
+            break;
+
+          case 'desbloquear':
+            if (!isGroup) {
+              await reply('Este comando solo funciona en grupos.');
+              break;
+            }
+
+            groupData.bloqueado = false;
+            saveData();
+            await reply('🔓 Bot desbloqueado para este grupo.');
+            break;
+
+          case 'crear': {
+            const input = text.slice('!crear'.length).trim();
+            const parts = input.split('|');
+
+            if (parts.length < 2) {
+              await reply('Uso: !crear nombre | respuesta');
+              break;
+            }
+
+            const name = parts.shift().trim().toLowerCase();
+            const response = parts.join('|').trim();
+
+            if (!/^[a-z0-9_-]{2,30}$/.test(name) || !response) {
+              await reply('❌ Nombre inválido o respuesta vacía.');
+              break;
+            }
+
+            db.comandos[name] = response;
+            saveData();
+
+            await reply(`✅ Comando !${name} creado.`);
+            break;
+          }
+
+          case 'comandos':
+            await reply(
+              '📜 COMANDOS PERSONALIZADOS\n' +
+              (Object.keys(db.comandos).length
+                ? Object.keys(db.comandos).map(c => '!' + c).join('\n')
+                : 'No hay comandos personalizados.')
+            );
+            break;
+
+          case 'borrarcomando': {
+            const name = args[1]?.toLowerCase();
+
+            if (!name || !db.comandos[name]) {
+              await reply('Uso: !borrarcomando nombre');
+              break;
+            }
+
+            delete db.comandos[name];
+            saveData();
+
+            await reply(`🗑️ Comando !${name} eliminado.`);
+            break;
+          }
+
+          default:
+            await reply('❓ Comando desconocido. Escribe !menu.');
+        }
+      } catch (error) {
+        console.error('Error procesando mensaje:', error);
+      }
+    }
+  });
 }
 
-module.exports = { ejecutarComando };
-(startbot)
+startBot().catch(error => {
+  console.error('No se pudo iniciar el bot:', error);
+});
