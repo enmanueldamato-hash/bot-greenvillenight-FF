@@ -72,6 +72,7 @@ async function startBot(){
     // ASIGNAR - FIX PARA QUE FUNCIONE CON @
     if(texto.startsWith('!asignar')){
         if(!tienePermiso(userJid,'co-owner')) return sock.sendMessage(jid,{text:'❌ Solo owner/co-owner - Tu rol: '+getRol(userJid)});
+        if((rolNuevo==='owner' || rolNuevo==='co-owner') && getRol(userJid)!=='owner') return sock.sendMessage(jid,{text:'❌ Solo el OWNER principal puede dar owner/co-owner'});
         const mentioned=msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]||null;
         const parts=texto.split(' '); 
         const rolNuevo=parts[parts.length-1].toLowerCase();
