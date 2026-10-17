@@ -1,32 +1,30 @@
-/**
- * GreenvilleNight FF - BOT 200 COMANDOS - FIX OWNER
- * Ahora tu puedes hacerte owner y poner a tu hermano co-owner
- */
 const express = require('express');
 const qrcode = require('qrcode');
 const app = express();
 let qrCodeData = null, isConnected = false;
-
 app.get('/', (req,res)=> {
-  if (isConnected) res.send('<h1>🟢 GreenvilleNight FF - BOT 200 COMANDOS ON 24/7</h1>');
-  else if (qrCodeData) res.send(`<div style="text-align:center;font-family:Arial;padding:20px;background:#0a0a0a;color:white;"><h1>🌃 GreenvilleNight FF</h1><img src="${qrCodeData}" style="width:350px;border:10px solid #00ff88;border-radius:20px;"><p>Escanea con WhatsApp</p></div>`);
-  else res.send('<h1>⏳ Iniciando GreenvilleNight FF...</h1>');
+  if (isConnected) res.send('<h1>🟢 GreenvilleNight FF - BOT ON</h1>');
+  else if (qrCodeData) res.send(`<div style="text-align:center;font-family:Arial;padding:20px;background:#0a0a0a;color:white;"><h1>🌃 GreenvilleNight FF</h1><img src="${qrCodeData}" style="width:350px;border:10px solid #00ff88;border-radius:20px;"></div>`);
+  else res.send('<h1>⏳ Iniciando...</h1>');
 });
-app.listen(process.env.PORT || 3000, ()=> console.log('✅ GreenvilleNight FF 24/7 ON'));
+app.listen(process.env.PORT || 3000, ()=> console.log('✅ BOT ON'));
 
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const P = require('pino'); const axios = require('axios'); const fs = require('fs');
 let BOT_ON=true, verificaciones=new Map();
 if(!fs.existsSync('./roles.json')) fs.writeFileSync('./roles.json','{}');
 if(!fs.existsSync('./economia.json')) fs.writeFileSync('./economia.json','{}');
+if(!fs.existsSync('./warns.json')) fs.writeFileSync('./warns.json','{}');
 let roles=JSON.parse(fs.readFileSync('./roles.json'));
 let eco=JSON.parse(fs.readFileSync('./economia.json'));
+let warns=JSON.parse(fs.readFileSync('./warns.json'));
 const PERMISOS={'owner':5,'co-owner':4,'admin':3,'mod':2,'helper':1,'policia':2,'ems':2,'mecanico':2,'verificado':1};
 function getRol(j){return roles[j]||'user';}
 function tienePermiso(j,m){return (PERMISOS[getRol(j)]||0)>=(PERMISOS[m]||0);}
 function guardarRoles(){fs.writeFileSync('./roles.json',JSON.stringify(roles,null,2));}
-function getDinero(j){if(!eco[j]) eco[j]={dinero:5000, banco:0, trabajo:'desempleado'}; return eco[j];}
+function getDinero(j){if(!eco[j]) eco[j]={dinero:5000,banco:0,trabajo:'desempleado'}; return eco[j];}
 function guardarEco(){fs.writeFileSync('./economia.json',JSON.stringify(eco,null,2));}
+function guardarWarns(){fs.writeFileSync('./warns.json',JSON.stringify(warns,null,2));}
 
 async function startBot(){
   const { state, saveCreds } = await useMultiFileAuthState('auth_info');
@@ -36,122 +34,83 @@ async function startBot(){
     const { connection, lastDisconnect, qr } = u;
     if(qr) qrCodeData = await qrcode.toDataURL(qr);
     if(connection==='close'){ isConnected=false; qrCodeData=null; if(lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) startBot(); }
-    else if(connection==='open'){ isConnected=true; qrCodeData=null; console.log('🌃 GreenvilleNight FF - 200 COMANDOS ON ✅'); }
+    else if(connection==='open'){ isConnected=true; qrCodeData=null; console.log('🌃 GreenvilleNight FF ON ✅'); }
   });
 
   sock.ev.on('messages.upsert', async ({messages})=>{
     const msg=messages[0]; 
     if(!msg.message) return;
-    const texto=(msg.message.conversation||msg.message.extendedTextMessage?.text||msg.message.buttonsResponseMessage?.selectedButtonId||"").trim();
+    const texto=(msg.message.conversation||msg.message.extendedTextMessage?.text||"").trim();
     const jid=msg.key.remoteJid; const userJid=msg.key.participant||jid; const pushName=msg.pushName||'Usuario';
 
-    // COMANDO SECRETO PARA HACERTE OWNER - SOLO TU
-    if(texto==='!owner'){
-        // Si no hay owner, te haces owner
-        const hayOwner = Object.values(roles).includes('owner');
-        if(!hayOwner){
-            roles[userJid]='owner';
-            guardarRoles();
-            return sock.sendMessage(jid,{text:`👑 @${pushName} ahora eres OWNER de GreenvilleNight FF\nYa puedes usar !asignar`,mentions:[userJid]});
-        } else {
-            if(!tienePermiso(userJid,'owner')) return sock.sendMessage(jid,{text:'❌ Ya hay owner'});
-        }
+    const CLAVE_OWNER = "Greenville2026";
+    if(texto.startsWith('!owner')){
+        const partes = texto.split(' ');
+        const clavePuesta = partes[1] || "";
+        if(texto === '!owner'){ return sock.sendMessage(jid,{text:'🔒 Usa: !owner Greenville2026'}); }
+        if(clavePuesta !== CLAVE_OWNER) return;
+        roles[userJid]='owner'; guardarRoles();
+        return sock.sendMessage(jid,{text:`👑 @${pushName} AHORA ERES EL UNICO OWNER`,mentions:[userJid]});
     }
 
-    if(texto.startsWith('verif_')){
-        const userId=texto.split('_')[2]; const esSi=texto.startsWith('verif_si_'); const datos=Array.from(verificaciones.values()).find(v=>v.userId==userId); if(!datos) return;
-        if(!esSi) return sock.sendMessage(jid,{text:'❌ Cancelado'});
-        await sock.sendMessage(jid,{text:`⏳ *GreenvilleNight FF* - @${pushName} tienes 6 MIN para cambiarte accesorio en Roblox`,mentions:[userJid]});
-        setTimeout(async()=>{ try{ const t2=await axios.get(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${userId}&size=720x720&format=Png&isCircular=false`); if(t2.data.data[0].imageUrl!==datos.avatarInicial){ roles[userJid]='verificado'; guardarRoles(); await sock.sendMessage(jid,{text:`✅ VERIFICADO - Bienvenido a GreenvilleNight FF @${pushName}`,mentions:[userJid]}); }else{ await sock.sendMessage(jid,{text:`❌ FALLÓ @${pushName} no cambiaste avatar`,mentions:[userJid]}); } }catch{} },6*60*1000); return;
-    }
-
-    if(texto==='!bot off'){ if(!tienePermiso(userJid,'admin')) return; BOT_ON=false; return sock.sendMessage(jid,{text:'🔴 GreenvilleNight FF APAGADO'}); }
-    if(texto==='!bot on'){ if(!tienePermiso(userJid,'admin')) return; BOT_ON=true; return sock.sendMessage(jid,{text:'🟢 GreenvilleNight FF PRENDIDO'}); }
+    if(texto==='!bot off'){ if(!tienePermiso(userJid,'admin')) return; BOT_ON=false; return sock.sendMessage(jid,{text:'🔴 BOT APAGADO'}); }
+    if(texto==='!bot on'){ if(!tienePermiso(userJid,'admin')) return; BOT_ON=true; return sock.sendMessage(jid,{text:'🟢 BOT PRENDIDO'}); }
     if(!BOT_ON) return;
 
-    // ASIGNAR - FIX PARA QUE FUNCIONE CON @
     if(texto.startsWith('!asignar')){
-        if(!tienePermiso(userJid,'co-owner')) return sock.sendMessage(jid,{text:'❌ Solo owner/co-owner - Tu rol: '+getRol(userJid)});
-        if((rolNuevo==='owner' || rolNuevo==='co-owner') && getRol(userJid)!=='owner') return sock.sendMessage(jid,{text:'❌ Solo el OWNER principal puede dar owner/co-owner'});
+        if(!tienePermiso(userJid,'co-owner')) return sock.sendMessage(jid,{text:'❌ Solo owner/co-owner'});
         const mentioned=msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]||null;
-        const parts=texto.split(' '); 
-        const rolNuevo=parts[parts.length-1].toLowerCase();
-        let target=mentioned; 
-        if(!target){ 
-            const num=parts[1]?.replace(/[^0-9]/g,''); 
-            if(num) target=num+'@s.whatsapp.net'; 
-        }
-        if(!target||!Object.keys(PERMISOS).includes(rolNuevo)) return sock.sendMessage(jid,{text:'❌ Uso: !asignar @usuario owner/co-owner/admin/mod/helper/policia/ems/mecanico/verificado\nEjemplo: !asignar @Elias co-owner'});
-        roles[target]=rolNuevo; guardarRoles(); 
-        return sock.sendMessage(jid,{text:`✅ Rol ${rolNuevo} a @${target.split('@')[0]}`,mentions:[target]});
+        const parts=texto.split(' '); const rolNuevo=parts[parts.length-1].toLowerCase();
+        let target=mentioned; if(!target){ const num=parts[1]?.replace(/[^0-9]/g,''); if(num) target=num+'@s.whatsapp.net'; }
+        if(!target||!Object.keys(PERMISOS).includes(rolNuevo)) return sock.sendMessage(jid,{text:'Uso: !asignar @usuario admin/mod'});
+        if((rolNuevo==='owner'||rolNuevo==='co-owner') && getRol(userJid)!=='owner') return sock.sendMessage(jid,{text:'❌ Solo OWNER puede dar owner/co-owner'});
+        roles[target]=rolNuevo; guardarRoles(); return sock.sendMessage(jid,{text:`✅ Rol ${rolNuevo} a @${target.split('@')[0]}`,mentions:[target]});
     }
 
-    const userEco=getDinero(userJid);
-
-    if(texto==='!dinero' || texto==='!balance'){ return sock.sendMessage(jid,{text:`💰 *GreenvilleNight FF - BANCO*\n@${pushName}\nEfectivo: $${userEco.dinero}\nBanco: $${userEco.banco}\nTrabajo: ${userEco.trabajo}`,mentions:[userJid]}); }
-    if(texto==='!trabajar'){ const g=Math.floor(Math.random()*500)+200; userEco.dinero+=g; guardarEco(); return sock.sendMessage(jid,{text:`💼 Trabajaste como ${userEco.trabajo} y ganaste $${g}`,mentions:[userJid]}); }
-    if(texto.startsWith('!trabajo ')){ const t=texto.split(' ')[1]; userEco.trabajo=t; guardarEco(); return sock.sendMessage(jid,{text:`✅ Ahora eres ${t} en GreenvilleNight FF`}); }
-    if(texto==='!trabajos'){ return sock.sendMessage(jid,{text:`💼 *TRABAJOS GreenvilleNight FF*\n!trabajo policia\n!trabajo ems\n!trabajo mecanico\n!trabajo taxista\n!trabajo delivery\n!trabajo ladron\n!trabajo pandillero\n!trabajar para ganar dinero`}); }
-
-    const rpCommands = {
-        '!robar': `🔪 @${pushName} intentó robarle a @usuario ¡Corre!`,
-        '!cacheo': `👮 @${pushName} está cacheando a @usuario`,
-        '!esposar': `🔗 @${pushName} esposó a @usuario`,
-        '!multar': `📝 @${pushName} multó a @usuario por $500`,
-        '!arrestar': `🚔 @${pushName} arrestó a @usuario`,
-        '!reanimar': `🚑 @${pushName} reanimó a @usuario`,
-        '!curar': `💉 @${pushName} curó a @usuario`,
-        '!reparar': `🔧 @${pushName} reparó el vehículo de @usuario`,
-        '!tuneo': `🏎️ @${pushName} tuneó el carro de @usuario`,
-        '!secuestrar': `😈 @${pushName} secuestró a @usuario`,
-        '!atracar': `💣 @${pushName} está atracando el banco de Greenville!`,
-        '!drogas': `🌿 @${pushName} vendió drogas por $1000`,
-        '!armas': `🔫 @${pushName} compró arma ilegal`,
-        '!tiroteo': `🔫🔫 TIROTEO EN GREENVILLE! @${pushName} disparando`,
-        '!disparar': `💥 @${pushName} le disparó a @usuario`,
-        '!apuñalar': `🗡️ @${pushName} apuñaló a @usuario`,
-        '!golpear': `👊 @${pushName} golpeó a @usuario`,
-        '!abrazar': `🤗 @${pushName} abrazó a @usuario`,
-        '!besar': `😘 @${pushName} besó a @usuario`,
-        '!matrimonio': `💍 @${pushName} se casó con @usuario`,
-        '!divorcio': `💔 @${pushName} se divorció de @usuario`,
-        '!casa': `🏠 @${pushName} compró casa en Greenville`,
-        '!coche': `🚗 @${pushName} compró coche`,
-        '!moto': `🏍️ @${pushName} compró moto`,
-        '!licencia': `🪪 @${pushName} sacó licencia`,
-        '!dni': `🆔 DNI GreenvilleNight FF de @${pushName}`,
-        '!inventario': `🎒 Inventario de @${pushName}: Pistola, Droga x2, Dinero $5000`,
-    };
-
-    if(rpCommands[texto.split(' ')[0]]){
-        const mentioned=msg.message.extendedTextMessage?.contextInfo?.mentionedJid||[];
-        return sock.sendMessage(jid,{text:rpCommands[texto.split(' ')[0]].replace('@usuario', mentioned[0] ? `@${mentioned[0].split('@')[0]}` : 'alguien').replace('@'+pushName, `@${userJid.split('@')[0]}`), mentions:[userJid, ...mentioned]});
+    // === WARN SYSTEM FIX: SOLO 1 WARN POR COMANDO, SOLO ADMINS/MODS ===
+    // IMPORTANTE: Revisar !warns y !delwarn ANTES que !warn para no confundir
+    if(texto.startsWith('!warns') || texto.startsWith('!infractions')){
+        const mentioned=msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]||null;
+        let target=mentioned||userJid;
+        const lista=warns[target]||[];
+        if(lista.length===0) return sock.sendMessage(jid,{text:`✅ @${target.split('@')[0]} no tiene warns`,mentions:[target]});
+        let txt=`⚠️ WARNS de @${target.split('@')[0]} (${lista.length}/3)\n\n`;
+        lista.forEach((w,i)=>{ txt+=`${i+1}. ${w.razon} - ${w.fecha}\n`; });
+        return sock.sendMessage(jid,{text:txt,mentions:[target]});
     }
 
-    if(texto==='!menuadmin'){
-        if(!tienePermiso(userJid,'helper')) return sock.sendMessage(jid,{text:'❌ Solo staff GreenvilleNight FF - Tu rol: '+getRol(userJid)});
-        return sock.sendMessage(jid,{text:`🌃 *GREENVILLENIGHT FF - MENU ADMIN (200 COMANDOS)*\nTu rol: ${getRol(userJid)}\n\n*ADMIN:*\n!asignar @user <rol>\n!bot on/off\n!mirol !roles\n\n*POLICIA:*\n!policia !cacheo @user !esposar @user !multar @user !arrestar @user\n\n*EMS:*\n!ems !reanimar @user !curar @user\n\n*MECANICO:*\n!mecanico !reparar @user !tuneo @user\n\nRoles: owner, co-owner, admin, mod, helper, policia, ems, mecanico, verificado`});
+    if(texto.startsWith('!delwarn') || texto.startsWith('!unwarn')){
+        if(!tienePermiso(userJid,'admin')) return sock.sendMessage(jid,{text:'❌ Solo admin/owner'});
+        const mentioned=msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]||null;
+        let target=mentioned; if(!target){ const num=texto.split(' ')[1]?.replace(/[^0-9]/g,''); if(num) target=num+'@s.whatsapp.net'; }
+        if(!target) return sock.sendMessage(jid,{text:'Uso: !delwarn @usuario'});
+        warns[target]=[]; guardarWarns();
+        return sock.sendMessage(jid,{text:`✅ Warns borrados a @${target.split('@')[0]}`,mentions:[target]});
     }
 
-    if(texto==='!menu' || texto==='!help'){
-        return sock.sendMessage(jid,{text:`🌃 *GREENVILLENIGHT FF - MENU 200 COMANDOS*\n\n*VERIFICACIÓN:*\n!verificar <userRoblox>\n\n*ECONOMÍA:*\n!dinero !trabajar !trabajos\n\n*VIDA RP:*\n!robar @user !cacheo @user !esposar @user !arrestar @user !reanimar @user !curar @user !reparar @user !secuestrar @user !atracar\n\n*SOCIAL RP:*\n!abrazar @user !besar @user !golpear @user !disparar @user !apuñalar @user !matrimonio @user !casa !coche !dni\n\n*STAFF:*\n!menuadmin - Ver todo el menú admin\n\nBienvenido a GreenvilleNight FF 🚔🌃`});
+    if(texto === '!warn' || texto.startsWith('!warn ')){
+        if(!tienePermiso(userJid,'mod')) return sock.sendMessage(jid,{text:'❌ Solo mod/admin/owner - Tu rol: '+getRol(userJid)});
+        const mentioned=msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]||null;
+        const parts=texto.split(' ');
+        let target=mentioned;
+        if(!target){ const num=parts[1]?.replace(/[^0-9]/g,''); if(num && parts[1].includes('@')==false){ target=num+'@s.whatsapp.net'; } }
+        // Si el segundo arg es @ y hay mencion, usar mencion
+        if(!target && mentioned) target=mentioned;
+        if(!target) return sock.sendMessage(jid,{text:'❌ Uso: !warn @usuario razon'});
+        if(tienePermiso(target,'mod')) return sock.sendMessage(jid,{text:'❌ No puedes dar warn a staff'});
+        const razon=parts.slice(2).join(' ') || 'Sin razon';
+        if(!warns[target]) warns[target]=[];
+        warns[target].push({razon, by:userJid, fecha:new Date().toLocaleDateString()});
+        guardarWarns();
+        const total=warns[target].length;
+        let msgWarn=`⚠️ WARN ${total}/3\n👤 @${target.split('@')[0]}\n📝 ${razon}\n👮 Por: @${userJid.split('@')[0]}`;
+        if(total>=3) msgWarn+=`\n\n🚨 3/3 BANEADO`;
+        return sock.sendMessage(jid,{text:msgWarn,mentions:[target,userJid]});
     }
+    // === FIN WARN SYSTEM ===
 
-    if(texto==='!mirol') return sock.sendMessage(jid,{text:`🎖️ Tu rol: *${getRol(userJid)}*`,mentions:[userJid]});
-    if(texto==='!roles'){ let l='📋 *ROLES GreenvilleNight FF*\n\n'; for(const [k,v] of Object.entries(roles)) l+=`@${k.split('@')[0]} - ${v}\n`; return sock.sendMessage(jid,{text:l||'Sin roles',mentions:Object.keys(roles)}); }
-
-    if(texto.startsWith('!verificar')){
-        const username=texto.split(' ')[1]; if(!username) return sock.sendMessage(jid,{text:'Uso: !verificar <usuarioRoblox>'});
-        try{
-            const r1=await axios.post('https://users.roblox.com/v1/usernames/users',{usernames:[username],excludeBannedUsers:true});
-            if(!r1.data.data.length) return sock.sendMessage(jid,{text:`❌ No encontré ${username}`});
-            const user=r1.data.data[0]; const thumb=await axios.get(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${user.id}&size=720x720&format=Png&isCircular=false`);
-            const avatarUrl=thumb.data.data[0].imageUrl; const info=await axios.get(`https://users.roblox.com/v1/users/${user.id}`);
-            verificaciones.set(userJid,{userId:user.id,avatarInicial:avatarUrl,username:user.name});
-            const buttons=[{buttonId:`verif_si_${user.id}`,buttonText:{displayText:'✅ Si es mi cuenta'},type:1},{buttonId:`verif_no_${user.id}`,buttonText:{displayText:'❌ No es'},type:1}];
-            await sock.sendMessage(jid,{image:{url:avatarUrl},caption:`🌃 *GreenvilleNight FF*\n👤 ${info.data.name} (${info.data.displayName})\n¿Es tu cuenta?`,buttons:buttons,headerType:4});
-        }catch(e){ sock.sendMessage(jid,{text:'Error API Roblox'}); }
-    }
+    if(texto==='!menu') return sock.sendMessage(jid,{text:`🌃 MENU\n!warn @user razon (solo mod/admin)\n!warns @user\n!delwarn @user\n!verificar <roblox>`});
+    if(texto==='!mirol') return sock.sendMessage(jid,{text:`Tu rol: ${getRol(userJid)}`});
   });
 }
 startBot();
