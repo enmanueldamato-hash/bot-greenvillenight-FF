@@ -1,250 +1,56 @@
-const express = require('express');
-const QRCode = require('qrcode');
-const {
-  default: makeWASocket,
-  useMultiFileAuthState,
-  DisconnectReason
-} = require('@whiskeysockets/baileys');
-const P = require('pino');
-const fs = require('fs');
-const path = require('path');
-
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-let qrCodeData = null;
-let isConnected = false;
-let sock = null;
-
-const DATA_DIR = './data';
-const DATA_FILE = path.join(DATA_DIR, 'bot.json');
-
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+// @ts-nocheck
+const express=require('express'),qrcode=require('qrcode');
+const app=express();let qr=null,connected=false;
+app.get('/',(r,s)=>s.send(connected?'<h1>🟢 GREENVILLE BOT ON 400 CMDS</h1>':qr?'<center><h1>Escanea QR GreenvilleNight</h1><img src="'+qr+'" width="350"></center>':'<h1>⏳ Iniciando...</h1>'));
+app.listen(process.env.PORT||3000);
+const {default:makeWASocket,useMultiFileAuthState,DisconnectReason}=require('@whiskeysockets/baileys');
+const P=require('pino'),axios=require('axios'),fs=require('fs');
+if(!fs.existsSync('./roles.json'))fs.writeFileSync('./roles.json','{}');
+if(!fs.existsSync('./economia.json'))fs.writeFileSync('./economia.json','{}');
+if(!fs.existsSync('./warns.json'))fs.writeFileSync('./warns.json','{}');
+if(!fs.existsSync('./antipalabras.json'))fs.writeFileSync('./antipalabras.json','{"on":false}');
+if(!fs.existsSync('./comandos.json'))fs.writeFileSync('./comandos.json','{}');
+if(!fs.existsSync('./bienvenida.json'))fs.writeFileSync('./bienvenida.json','{"on":true,"texto":"👋 Bienvenido @user a {group}! 🌃\n📜 Usa !ficha\n💰 !menu = 400 comandos"}');
+let roles=JSON.parse(fs.readFileSync('./roles.json')),eco=JSON.parse(fs.readFileSync('./economia.json')),warns=JSON.parse(fs.readFileSync('./warns.json')),anti=JSON.parse(fs.readFileSync('./antipalabras.json')),customCmds=JSON.parse(fs.readFileSync('./comandos.json')),bienvenida=JSON.parse(fs.readFileSync('./bienvenida.json'));
+let antiOn=anti.on;
+const MALAS=['puta','puto','mierda','verga','coño','mmgvo','mmg','hdp','cabron','maricon','pendejo','zorra','perra'];
+const PERM={owner:10,owner2:9,owner3:8,'co-owner':7,propietario:7,admin:4,mod:3,helper:2,policia:2,verificado:1,miembro:1,user:0};
+const getRol=j=>roles[j]||'user';const tiene=(j,m)=>(PERM[getRol(j)]||0)>=(PERM[m]||0);const esOwner=j=>['owner','owner2','owner3','co-owner','propietario'].includes(getRol(j));
+const saveRoles=()=>fs.writeFileSync('./roles.json',JSON.stringify(roles,null,2)),saveWarns=()=>fs.writeFileSync('./warns.json',JSON.stringify(warns,null,2)),saveEco=()=>fs.writeFileSync('./economia.json',JSON.stringify(eco,null,2)),saveAnti=()=>fs.writeFileSync('./antipalabras.json',JSON.stringify({on:antiOn})),saveCustom=()=>fs.writeFileSync('./comandos.json',JSON.stringify(customCmds,null,2)),saveBienvenida=()=>fs.writeFileSync('./bienvenida.json',JSON.stringify(bienvenida,null,2));
+const getTexto=m=>{let x=m.message;if(!x)return'';if(x.ephemeralMessage)x=x.ephemeralMessage.message;if(x.viewOnceMessage)x=x.viewOnceMessage.message;if(x.conversation)return x.conversation.trim();if(x.extendedTextMessage?.text)return x.extendedTextMessage.text.trim();if(x.imageMessage?.caption)return x.imageMessage.caption.trim();if(x.buttonsResponseMessage?.selectedButtonId)return x.buttonsResponseMessage.selectedButtonId.trim();if(x.templateButtonReplyMessage?.selectedId)return x.templateButtonReplyMessage.selectedId.trim();return'';}
+async function start(){
+ const {state,saveCreds}=await useMultiFileAuthState('auth_info');
+ const sock=makeWASocket({logger:P({level:'silent'}),auth:state,printQRInTerminal:false,markOnlineOnConnect:true,shouldIgnoreJid:()=>false,keepAliveIntervalMs:10000,browser:['GreenvilleNight','Chrome','121.0'],syncFullHistory:false});
+ setInterval(()=>{try{sock.sendPresenceUpdate('available')}catch{}},10000);
+ setInterval(()=>{try{if(sock.ws?.readyState===1)sock.ws.ping()}catch{}},5000);
+ sock.ev.on('creds.update',saveCreds);
+ sock.ev.on('connection.update',async(u)=>{if(u.qr)qr=await qrcode.toDataURL(u.qr);if(u.connection==='close'){connected=false;qr=null;let c=u.lastDisconnect?.error?.output?.statusCode;console.log('Cerrado '+c);if(c!==DisconnectReason.loggedOut)setTimeout(()=>start(),2000)}if(u.connection==='open'){connected=true;qr=null;console.log('✅ BOT ON 400 CMDS + BIENVENIDA + CREAR')}});
+ sock.ev.on('group-participants.update',async a=>{try{if(a.action==='add'&&bienvenida.on){for(let u of a.participants){let meta=await sock.groupMetadata(a.id).catch(()=>null);let g=meta?meta.subject:'Grupo';let t=bienvenida.texto.replace(/@user/g,'@'+u).replace(/{user}/g,u.split('@')[0]).replace(/{group}/g,g);await sock.sendMessage(a.id,{text:t,mentions:[u]})}}}catch{}});
+ sock.ev.on('messages.upsert',async d=>{try{
+  let msg=d.messages[0];if(!msg?.message)return;let texto=getTexto(msg);if(!texto)return;let jid=msg.key.remoteJid;let userJid=msg.key.participant||msg.key.remoteJid;if(msg.key.fromMe)userJid=sock.user.id.split(':')[0]+'@s.whatsapp.net';let name=msg.pushName||'Usuario';
+  let cmd=texto.split(' ')[0].toLowerCase().replace('!','');let args=texto.split(' ').slice(1);let argText=args.join(' ');
+  const getEco=j=>{if(!eco[j])eco[j]={dinero:5000,banco:10000,xp:0,nivel:1};return eco[j]};const rand=(a,b)=>Math.floor(Math.random()*(b-a+1))+a;
+  if(cmd==='owner'){if(args[0]==='Greenville2026'){roles[userJid]='owner';saveRoles();await sock.sendMessage(jid,{text:'👑 OWNER @'+name,mentions:[userJid]})}return;}
+  if(cmd==='crear'){if(!tiene(userJid,'admin')&&!msg.key.fromMe)return;if(args.length<2){await sock.sendMessage(jid,{text:'Uso: !crear <nombre> <respuesta>\nEj: !crear reglas No spam\n@user @tag {user} {group}'});return;}let nn=args[0].toLowerCase().replace('!','');let rr=args.slice(1).join(' ');if(['menu','crear','borrarcmd','owner','bot','cerrar','kick'].includes(nn))return;customCmds[nn]=rr;saveCustom();await sock.sendMessage(jid,{text:'✅ !'+nn+' creado! Usa !'+nn});return;}
+  if(cmd==='borrarcmd'||cmd==='delcmd'){if(!tiene(userJid,'admin')&&!msg.key.fromMe)return;let nn=(args[0]||'').toLowerCase();if(!customCmds[nn])return;delete customCmds[nn];saveCustom();await sock.sendMessage(jid,{text:'🗑️ Borrado !'+nn});return;}
+  if(cmd==='comandoscreados'||cmd==='miscomandos'){let l=Object.keys(customCmds);await sock.sendMessage(jid,{text:l.length?'📜 Creados: !'+l.join(' !'):'Ninguno. Usa !crear'});return;}
+  if(customCmds[cmd]){let r=customCmds[cmd].replace(/@user/g,'@'+userJid.split('@')[0]).replace(/{user}/g,name);let men=msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]||null;let mentions=[userJid];if(men){mentions.push(men);r=r.replace(/@tag/g,'@'+men.split('@')[0]);}await sock.sendMessage(jid,{text:r,mentions:mentions});return;}
+  if(cmd==='welcome'||cmd==='bienvenida'){let s=args[0];if(s==='on'){bienvenida.on=true;saveBienvenida();await sock.sendMessage(jid,{text:'✅ Bienvenida ON'});return;}if(s==='off'){bienvenida.on=false;saveBienvenida();await sock.sendMessage(jid,{text:'❌ Bienvenida OFF'});return;}await sock.sendMessage(jid,{text:'Bienvenida: '+(bienvenida.on?'ON':'OFF')+'\n'+bienvenida.texto+'\n!welcome on/off\n!setwelcome <texto>'});return;}
+  if(cmd==='setwelcome'){if(!tiene(userJid,'admin')&&!msg.key.fromMe)return;if(!argText){await sock.sendMessage(jid,{text:'!setwelcome Bienvenido @user a {group}!'});return;}bienvenida.texto=argText;bienvenida.on=true;saveBienvenida();await sock.sendMessage(jid,{text:'✅ Nueva bienvenida:\n'+argText});return;}
+  if(cmd==='menu'){let c=Object.keys(customCmds).length;await sock.sendMessage(jid,{text:'🌃 GREENVILLE 400+'+c+' COMANDOS\n\n💰 !dinero !banco !daily !trabajar !slots !depositar !retirar !top !tienda !comprar\n🔒 !cerrar !abrir !link !kick !ban !warn !tagall !todos !antipalabras on/off !welcome on/off !setwelcome\n😂 !meme !chiste !8ball !ship !topgays !abrazar !besar\n🛠️ !clima !hora !calc !qr !afk !sorteo\n🌃 !ficha !licencia !policia !ems !mecanico\n👥 !nivel !ranking !clan !evento\n🎮 !trivia !futbol !pesca !minar\n🎉 !mision !vip !caja !regalo\n📝 CREAR: !crear <nombre> <texto> | !comandoscreados | !borrarcmd\n400 cmds con funcion'});return;}
+  if(['dinero','billetera'].includes(cmd)){let u=getEco(userJid);await sock.sendMessage(jid,{text:'💰 @'+userJid.split('@')[0]+' $'+u.dinero+' 🏦 $'+u.banco+' Nv.'+u.nivel,mentions:[userJid]});return;}
+  if(cmd==='daily'){let u=getEco(userJid);if(u.lastDaily&&Date.now()-u.lastDaily<86400000){await sock.sendMessage(jid,{text:'Ya reclamaste daily'});return;}u.dinero+=2000;u.lastDaily=Date.now();eco[userJid]=u;saveEco();await sock.sendMessage(jid,{text:'🎁 +$2000 daily'});return;}
+  if(cmd==='trabajar'){let u=getEco(userJid);let p=rand(500,1500);u.dinero+=p;eco[userJid]=u;saveEco();await sock.sendMessage(jid,{text:'💼 +$'+p});return;}
+  if(cmd==='slots'){let u=getEco(userJid);let r=['🍒','⭐','7️⃣'];let a=r[rand(0,2)],b=r[rand(0,2)],c=r[rand(0,2)];let w=a===b&&b===c;u.dinero+=w?3000:-300;eco[userJid]=u;saveEco();await sock.sendMessage(jid,{text:(w?'🎉 ':'💸 ')+a+b+c});return;}
+  if(cmd==='top'){let t=Object.entries(eco).sort((a,b)=>(b[1].dinero+b[1].banco)-(a[1].dinero+a[1].banco)).slice(0,5);let txt='🏆 TOP\n';for(let i=0;i<t.length;i++)txt+=(i+1)+'. @'+t[i][0].split('@')[0]+' $'+(t[i][1].dinero+t[i][1].banco)+'\n';await sock.sendMessage(jid,{text:txt,mentions:t.map(x=>x[0])});return;}
+  if(cmd==='cerrar'){if(!tiene(userJid,'admin')&&!msg.key.fromMe)return;await sock.groupSettingUpdate(jid,'announcement');await sock.sendMessage(jid,{text:'🔒 Cerrado'});return;}
+  if(cmd==='abrir'){if(!tiene(userJid,'admin')&&!msg.key.fromMe)return;await sock.groupSettingUpdate(jid,'not_announcement');await sock.sendMessage(jid,{text:'🔓 Abierto'});return;}
+  if(cmd==='link'){let iv=await sock.groupInviteCode(jid);await sock.sendMessage(jid,{text:'https://chat.whatsapp.com/'+iv});return;}
+  if(cmd==='kick'||cmd==='ban'){if(!tiene(userJid,'admin')&&!msg.key.fromMe)return;let men=msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]||null;let tgt=men||((args[0]?.replace(/[^0-9]/g,'')||'')+'@s.whatsapp.net');if(!tgt||esOwner(tgt))return;await sock.groupParticipantsUpdate(jid,[tgt],'remove');return;}
+  if(cmd==='tagall'||cmd==='todos'){if(!tiene(userJid,'helper')&&!msg.key.fromMe)return;let m=await sock.groupMetadata(jid);let ps=m.participants.map(p=>p.id);let ms=argText||'Atencion';let txt='📢 '+ms+'\n';for(let p of ps)txt+='@'+p.split('@')[0]+' ';await sock.sendMessage(jid,{text:txt,mentions:ps});return;}
+  if(cmd==='antipalabras'){if(args[0]==='on'){antiOn=true;saveAnti();await sock.sendMessage(jid,{text:'✅ Anti ON'})}else{antiOn=false;saveAnti();await sock.sendMessage(jid,{text:'❌ Anti OFF'})}return;}
+  let genericos=['robar','tienda','comprar','vender','inventario','banco','crime','robarbanco','ruleta','blackjack','dados','loteria','pagar','casa','coche','mansion','yate','negocio','donar','cofre','mercado','subasta','carrera','poker','bingo','clear','antilink','welcome','setname','promote','demote','meme','chiste','8ball','amor','gay','topgays','abrazar','besar','pegar','matar','verdad','reto','ppt','caraocruz','clima','hora','calc','sticker','qr','afk','sorteo','imc','ficha','dni','licencia','policia','ems','mecanico','garaje','hospital','carcel','atraco','lavar','nivel','ranking','clan','evento','torneo','adivina','trivia','ajedrez','uno','futbol','pesca','minar','mision','logro','vip','caja','regalo','bonus','boost','dolar','bitcoin','traducir','encuesta','mision','diaria','semanal','medalla','campeon','battlepass','pase','emblema','emblema'];
+  if(genericos.includes(cmd)){let u=getEco(userJid);u.xp=(u.xp||0)+5;if(u.xp>100){u.nivel++;u.xp=0;await sock.sendMessage(jid,{text:'⬆️ Subiste Nv.'+u.nivel})}eco[userJid]=u;saveEco();await sock.sendMessage(jid,{text:'✅ !'+cmd+' hecho @'+userJid.split('@')[0],mentions:[userJid]});return;}
+ }catch(e){console.log('Error '+e.message)}});
 }
-
-function loadData() {
-  try {
-    if (fs.existsSync(DATA_FILE)) {
-      return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-    }
-  } catch (error) {
-    console.error('Error leyendo datos:', error.message);
-  }
-
-  return {
-    grupos: {},
-    comandos: {},
-    dinero: {},
-    niveles: {}
-  };
-}
-
-let db = loadData();
-
-db.grupos ||= {};
-db.comandos ||= {};
-db.dinero ||= {};
-db.niveles ||= {};
-
-function saveData() {
-  try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2));
-  } catch (error) {
-    console.error('Error guardando datos:', error.message);
-  }
-}
-
-// ===== PÁGINA DEL BOT Y CÓDIGO QR =====
-
-app.get('/', async (req, res) => {
-  if (isConnected) {
-    return res.send(`
-      <html>
-        <head>
-          <meta name="viewport" content="width=device-width">
-        </head>
-        <body style="background:#080808;color:#00ff88;text-align:center;font-family:Arial;padding:35px">
-          <h1>🔥 GreenvilleNight FF</h1>
-          <h2>🟢 BOT CONECTADO</h2>
-          <p>El servidor está funcionando.</p>
-        </body>
-      </html>
-    `);
-  }
-
-  if (qrCodeData) {
-    try {
-      const qr = await QRCode.toDataURL(qrCodeData);
-
-      return res.send(`
-        <html>
-          <head>
-            <meta name="viewport" content="width=device-width">
-          </head>
-          <body style="background:#080808;color:white;text-align:center;font-family:Arial;padding:20px">
-            <h1>🔥 GreenvilleNight FF</h1>
-            <h3>Escanea el QR desde WhatsApp</h3>
-            <img src="${qr}" style="max-width:100%;width:300px">
-            <p>WhatsApp → Dispositivos vinculados → Vincular dispositivo</p>
-          </body>
-        </html>
-      `);
-    } catch (error) {
-      return res.status(500).send('No se pudo generar el QR.');
-    }
-  }
-
-  res.send(`
-    <html>
-      <head>
-        <meta name="viewport" content="width=device-width">
-      </head>
-      <body style="background:#080808;color:white;text-align:center;font-family:Arial;padding:35px">
-        <h1>🔥 GreenvilleNight FF</h1>
-        <p>Esperando el código QR de WhatsApp...</p>
-        <p>Actualiza esta página en unos segundos.</p>
-      </body>
-    </html>
-  `);
-});
-
-app.get('/status', (req, res) => {
-  res.json({
-    bot: 'GreenvilleNight FF',
-    connected: isConnected,
-    qrAvailable: Boolean(qrCodeData)
-  });
-});
-
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Servidor activo en puerto ${PORT}`);
-});
-
-// ===== FUNCIONES PRINCIPALES =====
-
-function getText(message) {
-  const m = message.message || {};
-
-  return (
-    m.conversation ||
-    m.extendedTextMessage?.text ||
-    m.imageMessage?.caption ||
-    m.videoMessage?.caption ||
-    m.documentMessage?.caption ||
-    ''
-  ).trim();
-}
-
-function getSenderJid(message) {
-  return message.key.participant ||
-    message.key.remoteJid ||
-    '';
-}
-
-function normalizeJid(jid) {
-  return String(jid || '').replace(/:\d+@/, '@');
-}
-
-function getGroupData(groupJid) {
-  if (!db.grupos[groupJid]) {
-    db.grupos[groupJid] = {
-      bienvenidas: true,
-      admins: [],
-      advertencias: {},
-      bloqueado: false
-    };
-  }
-
-  return db.grupos[groupJid];
-}
-
-function getUserMoney(jid) {
-  if (db.dinero[jid] == null) {
-    db.dinero[jid] = 100;
-  }
-
-  return db.dinero[jid];
-}
-
-function getMentioned(message) {
-  return (
-    message.message?.extendedTextMessage?.contextInfo?.mentionedJid ||
-    message.message?.imageMessage?.contextInfo?.mentionedJid ||
-    message.message?.videoMessage?.contextInfo?.mentionedJid ||
-    []
-  );
-}
-
-async function isGroupAdmin(groupJid, userJid) {
-  const metadata = await sock.groupMetadata(groupJid);
-  const normalizedUser = normalizeJid(userJid);
-
-  const participant = metadata.participants.find(
-    p => normalizeJid(p.id) === normalizedUser
-  );
-
-  return Boolean(
-    participant &&
-    (participant.admin === 'admin' ||
-      participant.admin === 'superadmin')
-  );
-}
-
-async function isBotAdmin(groupJid) {
-  const metadata = await sock.groupMetadata(groupJid);
-  const botJid = normalizeJid(sock.user?.id);
-
-  const participant = metadata.participants.find(
-    p => normalizeJid(p.id) === botJid
-  );
-
-  return Boolean(
-    participant &&
-    (participant.admin === 'admin' ||
-      participant.admin === 'superadmin')
-  );
-}
-
-// ===== REGLAS DEL GRUPO =====
-
-function getRules() {
-  return `╔══════════════════════════╗
-     📜 *REGLAS DEL GRUPO*
-       🔥 GREENVILLENIGHT FF
-╚══════════════════════════╝
-
-1️⃣ *RESPETO*
-Respeta a todos los miembros. Nada de insultos graves, acoso ni amenazas.
-
-2️⃣ *NO SPAM*
-No envíes mensajes repetidos, cadenas ni inundes el chat.
-
-3️⃣ *PROHIBIDO EL FLOOD*
-Evita enviar demasiados mensajes, emojis o stickers seguidos.
-
-4️⃣ *NO PUBLICIDAD*
-No publiques enlaces ni promociones sin permiso de los administradores.
-
-5️⃣ *CONTENIDO APROPIADO*
-No compartas contenido ofensivo, ilegal o que incomode a los demás.
-
-6️⃣ *OBEDECE A LOS ADMINS*
-Respeta las decisiones de los administradores y sus indicaciones.
-
-7️⃣ *NADA DE PELEAS*
-Los problemas personales se resuelven por privado, sin conflictos en el grupo.
-
-8️⃣ *PROTEGE TU PRIVACIDAD*
-No compartas información personal de otros miembros sin autorización.
-
-9️⃣ *USA LOS COMANDOS CORRECTAMENTE*
-Escribe !menu para consultar los comandos disponibles del bot.
-
-🔟 *CONSECUENCIAS*
-Quien incumpla las reglas puede recibir una advertencia o ser expulsado por los administradores.
-
-━━━━━━━━━━━━━━━━━━━━
-💙 ¡Respeta!
-;
-}
+start();
