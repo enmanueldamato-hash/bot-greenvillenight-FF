@@ -9,7 +9,7 @@
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.18",
     "express": "^4.18.2",
-    "【entity-axios¦canonical_name=axios】": "^1.6.7",
+    "axios": "^1.6.7",
     "qrcode": "^1.5.3",
     "qrcode-terminal": "^0.12.0",
     "pino": "^8.19.3",
