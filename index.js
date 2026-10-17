@@ -1,210 +1,663 @@
-const express = require('express');
-const qrcode = require('qrcode');
-const app = express();
-let qrCodeData = null, isConnected = false;
-app.get('/', (req,res)=> {
-  if (isConnected) res.send('<h1>🟢 GreenvilleNight FF - BOT ON</h1>');
-  else if (qrCodeData) res.send(`<div style="text-align:center;font-family:Arial;padding:20px;background:#0a0a0a;color:white;"><h1>🌃 GreenvilleNight FF</h1><img src="${qrCodeData}" style="width:350px;border:10px solid #00ff88;border-radius:20px;"></div>`);
-  else res.send('<h1>⏳ Iniciando...</h1>');
-});
-app.listen(process.env.PORT || 3000, ()=> console.log('✅ WEB ON'));
 
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
-const P = require('pino'); const axios = require('axios'); const fs = require('fs');
-let BOT_ON=true, verificaciones=new Map();
-if(!fs.existsSync('./roles.json')) fs.writeFileSync('./roles.json','{}');
-if(!fs.existsSync('./economia.json')) fs.writeFileSync('./economia.json','{}');
-if(!fs.existsSync('./warns.json')) fs.writeFileSync('./warns.json','{}');
-let roles=JSON.parse(fs.readFileSync('./roles.json'));
-let eco=JSON.parse(fs.readFileSync('./economia.json'));
-let warns=JSON.parse(fs.readFileSync('./warns.json'));
+const fs = require('fs');
+const path = require('path');
 
-const PERMISOS={
-  'owner':10,'owner2':9,'owner3':8,'co-owner':7,'propietario':7,'propietario2':6,'propietario3':5,'admin':4,'mod':3,'helper':2,'policia':2,'ems':2,'mecanico':2,'verificado':1
-};
-function getRol(j){return roles[j]||'user';}
-function tienePermiso(j,m){return (PERMISOS[getRol(j)]||0)>=(PERMISOS[m]||0);}
-function esOwnerProtegido(j){const rol=getRol(j); return ['owner','owner2','owner3','co-owner','propietario','propietario2','propietario3'].includes(rol);}
-function guardarRoles(){fs.writeFileSync('./roles.json',JSON.stringify(roles,null,2));}
-function guardarWarns(){fs.writeFileSync('./warns.json',JSON.stringify(warns,null,2));}
-function getTexto(msg){
-  let m=msg.message; if(!m) return '';
-  if(m.ephemeralMessage) m=m.ephemeralMessage.message;
-  if(m.viewOnceMessage) m=m.viewOnceMessage.message;
-  if(m.viewOnceMessageV2) m=m.viewOnceMessageV2.message;
-  if(m.documentWithCaptionMessage) m=m.documentWithCaptionMessage.message;
-  if(m.conversation) return m.conversation.trim();
-  if(m.extendedTextMessage?.text) return m.extendedTextMessage.text.trim();
-  if(m.imageMessage?.caption) return m.imageMessage.caption.trim();
-  if(m.videoMessage?.caption) return m.videoMessage.caption.trim();
-  if(m.buttonsResponseMessage?.selectedButtonId) return m.buttonsResponseMessage.selectedButtonId.trim();
-  if(m.listResponseMessage?.singleSelectReply?.selectedRowId) return m.listResponseMessage.singleSelectReply.selectedRowId.trim();
-  if(m.templateButtonReplyMessage?.selectedId) return m.templateButtonReplyMessage.selectedId.trim();
-  return '';
-}
+// ===== CONFIGURACIÓN =====
+// Define OWNER_JID en las variables de entorno.
+// Ejemplo: 1234567890@s.whatsapp.net
+const OWNER_JID = process.env.OWNER_JID || '';
 
-async function startBot(){
-  const { state, saveCreds } = await useMultiFileAuthState('auth_info');
-  const sock = makeWASocket({ logger: P({level:'silent'}), auth: state, printQRInTerminal:false, isPublic:true, markOnlineOnConnect:true, shouldIgnoreJid:()=>false });
-  sock.ev.on('creds.update', saveCreds);
-  sock.ev.on('connection.update', async (u)=>{
-    const { connection, lastDisconnect, qr } = u;
-    if(qr) qrCodeData = await qrcode.toDataURL(qr);
-    if(connection==='close'){ isConnected=false; qrCodeData=null; if(lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) startBot(); }
-    else if(connection==='open'){ isConnected=true; qrCodeData=null; console.log('🌃 GreenvilleNight FF BOT CONECTADO ✅ - ID: '+sock.user.id); }
-  });
+const DATA = path.join(__dirname, 'datos_bot');
+if (!fs.existsSync(DATA)) fs.mkdirSync(DATA, { recursive: true });
 
-  sock.ev.on('messages.upsert', async ({messages})=>{
-    try{
-    const msg=messages[0];
-    if(!msg || !msg.message) return;
-    const texto=getTexto(msg);
-    if(!texto) return;
-    const jid=msg.key.remoteJid;
-    // RESPONDE EN TODOS LOS GRUPOS - SIN FILTRO
-    // No hay lista de grupos permitidos, responde en cualquiera donde este el bot
+function leerArchivo(nombre, inicial) {
+    const archivo = path.join(DATA, nombre);
 
-    // FIX: Si el mensaje es mio (fromMe) usar mi propio ID como userJid para que me responda
-    let userJid=msg.key.participant || msg.key.remoteJid;
-    if(msg.key.fromMe){
-      userJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-      console.log('📩 MENSAJE MIO DETECTADO: '+texto);
-    }
-    const pushName=msg.pushName||'Enmanuel';
-    console.log(`📩 ${pushName} (${userJid}): ${texto} | fromMe=${msg.key.fromMe} | jid=${jid}`);
-
-    if(texto.startsWith('verif_')){
-        const userId=texto.split('_')[2]; const esSi=texto.startsWith('verif_si_'); const datos=Array.from(verificaciones.values()).find(v=>v.userId==userId); if(!datos) return;
-        if(!esSi) return sock.sendMessage(jid,{text:'❌ Cancelado'});
-        await sock.sendMessage(jid,{text:`⏳ @${pushName} tienes 6 MIN para cambiarte accesorio en Roblox`,mentions:[userJid]});
-        setTimeout(async()=>{ try{ const t2=await axios.get(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${userId}&size=720x720&format=Png&isCircular=false`); if(t2.data.data[0].imageUrl!==datos.avatarInicial){ roles[userJid]='verificado'; guardarRoles(); await sock.sendMessage(jid,{text:`✅ VERIFICADO - Bienvenido @${pushName} rol verificado dado`,mentions:[userJid]}); }else{ await sock.sendMessage(jid,{text:`❌ FALLÓ @${pushName}`,mentions:[userJid]}); } }catch{} },6*60*1000); return;
-    }
-
-    const CLAVE="Greenville2026";
-    if(texto.startsWith('!owner')){
-        const clavePuesta=texto.split(' ')[1]||"";
-        if(texto==='!owner') return sock.sendMessage(jid,{text:'🔒 Usa: !owner Greenville2026'});
-        if(clavePuesta!==CLAVE) return;
-        roles[userJid]='owner'; guardarRoles();
-        return sock.sendMessage(jid,{text:`👑 @${pushName} AHORA ERES OWNER PRINCIPAL - Ya puedo responderte siempre`,mentions:[userJid]});
-    }
-
-    if(texto==='!bot off'){ if(!tienePermiso(userJid,'admin') && !msg.key.fromMe) return; BOT_ON=false; return sock.sendMessage(jid,{text:'🔴 BOT APAGADO'}); }
-    if(texto==='!bot on'){ if(!tienePermiso(userJid,'admin') && !msg.key.fromMe) return; BOT_ON=true; return sock.sendMessage(jid,{text:'🟢 BOT PRENDIDO'}); }
-    if(!BOT_ON && !msg.key.fromMe) return;
-
-    // MENU COMPLETO ARREGLADO
-    if(texto==='!menu' || texto==='!help' || texto==='!menu completo'){
-        return sock.sendMessage(jid,{text:`🌃 *GREENVILLENIGHT FF - MENU COMPLETO*
-
-*✅ VERIFICACION (da verificado automatico):*
-!verificar <usuarioRoblox>
-
-*💰 ECONOMIA:*
-!dinero - ver tu dinero
-!trabajar - trabajar
-
-*⚠️ MODERACION:*
-!warn @usuario razon (1 warn, 3 = expulsion)
-!warns @usuario - ver warns
-!delwarn @usuario - quitar warns
-
-*👮 ROLES DISPONIBLES:*
-owner, owner2, owner3
-propietario, propietario2, propietario3
-admin, mod, helper
-policia, ems, mecanico, verificado
-
-*🔧 STAFF:*
-!asignar @usuario <rol>
-!mirol - ver tu rol
-!roles - ver todos los roles
-!bot on/off
-
-*🔑 DUEÑO:*
-!owner Greenville2026
-
-Si no te respondo usa !owner Greenville2026 primero`});
-    }
-
-    if(texto==='!menuadmin'){
-        if(!tienePermiso(userJid,'helper') && !msg.key.fromMe) return sock.sendMessage(jid,{text:'❌ Solo staff'});
-        return sock.sendMessage(jid,{text:`🌃 MENU ADMIN - Tu rol: ${getRol(userJid)}
-!warn @user
-!warns @user
-!delwarn @user
-!asignar @user <rol>
-!bot on/off`});
-    }
-
-    if(texto.startsWith('!asignar')){
-        if(!tienePermiso(userJid,'owner3') && !msg.key.fromMe) return sock.sendMessage(jid,{text:'❌ Solo owner/owner2/owner3 - Tu rol: '+getRol(userJid)});
-        const mentioned=msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]||null;
-        const parts=texto.split(' '); const rolNuevo=parts[parts.length-1].toLowerCase();
-        let target=mentioned; if(!target){ const num=parts[1]?.replace(/[^0-9]/g,''); if(num) target=num+'@s.whatsapp.net'; }
-        if(!target||!Object.keys(PERMISOS).includes(rolNuevo)) return sock.sendMessage(jid,{text:'❌ Uso: !asignar @usuario <rol>\nRoles: '+Object.keys(PERMISOS).join(', ')});
-        if(['owner','owner2','owner3'].includes(rolNuevo) && getRol(userJid)!=='owner' && !msg.key.fromMe) return sock.sendMessage(jid,{text:'❌ Solo OWNER principal'});
-        roles[target]=rolNuevo; guardarRoles(); 
-        return sock.sendMessage(jid,{text:`✅ Rol ${rolNuevo} a @${target.split('@')[0]}`,mentions:[target]});
-    }
-
-    if(texto.startsWith('!warns') || texto.startsWith('!infractions')){
-        const mentioned=msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]||null;
-        let target=mentioned||userJid;
-        const lista=warns[target]||[];
-        if(lista.length===0) return sock.sendMessage(jid,{text:`✅ @${target.split('@')[0]} sin warns`,mentions:[target]});
-        let txt=`⚠️ WARNS @${target.split('@')[0]} (${lista.length}/3)\n`; lista.forEach((w,i)=>{ txt+=`${i+1}. ${w.razon}\n`; });
-        return sock.sendMessage(jid,{text:txt,mentions:[target]});
-    }
-
-    if(texto.startsWith('!delwarn')){
-        if(!tienePermiso(userJid,'admin') && !msg.key.fromMe) return sock.sendMessage(jid,{text:'❌ Solo admin'});
-        const mentioned=msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]||null;
-        let target=mentioned; if(!target){ const num=texto.split(' ')[1]?.replace(/[^0-9]/g,''); if(num) target=num+'@s.whatsapp.net'; }
-        if(!target) return sock.sendMessage(jid,{text:'Uso: !delwarn @usuario'});
-        warns[target]=[]; guardarWarns();
-        return sock.sendMessage(jid,{text:`✅ Warns borrados a @${target.split('@')[0]}`,mentions:[target]});
-    }
-
-    if(texto==='!warn' || texto.startsWith('!warn ')){
-        if(!tienePermiso(userJid,'mod') && !msg.key.fromMe) return sock.sendMessage(jid,{text:'❌ Solo mod/admin - Tu rol: '+getRol(userJid)});
-        const mentioned=msg.message.extendedTextMessage?.contextInfo?.mentionedJid?.[0]||null;
-        const parts=texto.split(' ');
-        let target=mentioned; if(!target){ const num=parts[1]?.replace(/[^0-9]/g,''); if(num) target=num+'@s.whatsapp.net'; }
-        if(!target) return sock.sendMessage(jid,{text:'❌ Uso: !warn @usuario razon'});
-        if(esOwnerProtegido(target)) return sock.sendMessage(jid,{text:'❌ No puedes dar warn a OWNER/PROPIETARIO'});
-        const razon=parts.slice(2).join(' ')||'Sin razon';
-        if(!warns[target]) warns[target]=[];
-        warns[target].push({razon, by:userJid, fecha:new Date().toLocaleDateString()});
-        guardarWarns();
-        const total=warns[target].length;
-        let msgWarn=`⚠️ WARN ${total}/3 @${target.split('@')[0]} Razon: ${razon}`;
-        if(total>=3){
-            msgWarn+=`\n🚨 3/3 - EXPULSANDO`;
-            await sock.sendMessage(jid,{text:msgWarn,mentions:[target]});
-            try{ await sock.groupParticipantsUpdate(jid,[target],'remove'); await sock.sendMessage(jid,{text:`✅ @${target.split('@')[0]} expulsado`,mentions:[target]}); }catch{ await sock.sendMessage(jid,{text:`⚠️ Hazme admin para expulsar`}); }
-            warns[target]=[]; guardarWarns(); return;
+    try {
+        if (fs.existsSync(archivo)) {
+            return JSON.parse(fs.readFileSync(archivo, 'utf8'));
         }
-        return sock.sendMessage(jid,{text:msgWarn,mentions:[target]});
+    } catch (error) {
+        console.error(`Error leyendo ${nombre}:`, error.message);
     }
 
-    if(texto==='!mirol') return sock.sendMessage(jid,{text:`🎖️ Tu rol: *${getRol(userJid)}*`,mentions:[userJid]});
-    if(texto==='!roles'){ let l='📋 ROLES\n'; for(const [k,v] of Object.entries(roles)) l+=`@${k.split('@')[0]} - ${v}\n`; return sock.sendMessage(jid,{text:l||'Sin roles',mentions:Object.keys(roles)}); }
-
-    if(texto.startsWith('!verificar')){
-        const username=texto.split(' ')[1]; if(!username) return sock.sendMessage(jid,{text:'Uso: !verificar <usuarioRoblox>'});
-        try{
-            const r1=await axios.post('https://users.roblox.com/v1/usernames/users',{usernames:[username],excludeBannedUsers:true});
-            if(!r1.data.data.length) return sock.sendMessage(jid,{text:`❌ No encontré ${username}`});
-            const user=r1.data.data[0]; const thumb=await axios.get(`https://thumbnails.roblox.com/v1/users/avatar?userIds=${user.id}&size=720x720&format=Png&isCircular=false`);
-            const avatarUrl=thumb.data.data[0].imageUrl; const info=await axios.get(`https://users.roblox.com/v1/users/${user.id}`);
-            verificaciones.set(userJid,{userId:user.id,avatarInicial:avatarUrl,username:user.name});
-            const buttons=[{buttonId:`verif_si_${user.id}`,buttonText:{displayText:'✅ Si es mi cuenta'},type:1},{buttonId:`verif_no_${user.id}`,buttonText:{displayText:'❌ No es'},type:1}];
-            await sock.sendMessage(jid,{image:{url:avatarUrl},caption:`🌃 GreenvilleNight FF\n👤 ${info.data.name}`,buttons:buttons,headerType:4});
-        }catch{ sock.sendMessage(jid,{text:'Error API Roblox'}); }
-    }
-
-    }catch(e){ console.log('Error:', e.message); }
-  });
+    fs.writeFileSync(archivo, JSON.stringify(inicial, null, 2));
+    return inicial;
 }
-startBot();
+
+function guardarArchivo(nombre, datos) {
+    fs.writeFileSync(
+        path.join(DATA, nombre),
+        JSON.stringify(datos, null, 2)
+    );
+}
+
+const roles = leerArchivo('roles.json', {});
+const economia = leerArchivo('economia.json', {});
+const avisos = leerArchivo('avisos.json', {});
+
+const niveles = {
+    usuario: 0,
+    verificado: 1,
+    helper: 2,
+    mod: 3,
+    admin: 4,
+    'co-owner': 5,
+    owner: 6
+};
+
+function numero(jid) {
+    return String(jid || '').split('@')[0].split(':')[0];
+}
+
+function obtenerRol(jid) {
+    if (OWNER_JID && numero(jid) === numero(OWNER_JID)) {
+        return 'owner';
+    }
+
+    return roles[jid] || 'usuario';
+}
+
+function tieneRol(jid, minimo) {
+    return (niveles[obtenerRol(jid)] ?? 0) >=
+        (niveles[minimo] ?? 999);
+}
+
+function usuarioEco(jid) {
+    if (!economia[jid]) {
+        economia[jid] = {
+            dinero: 1000,
+            banco: 0,
+            inventario: {},
+            ultimoDaily: 0
+        };
+    }
+
+    const u = economia[jid];
+    u.dinero = Number(u.dinero) || 0;
+    u.banco = Number(u.banco) || 0;
+    u.inventario ||= {};
+    u.ultimoDaily ||= 0;
+
+    return u;
+}
+
+function guardarEconomia() {
+    guardarArchivo('economia.json', economia);
+}
+
+function dinero(valor) {
+    return '$' + Math.floor(valor).toLocaleString('en-US');
+}
+
+function textoMensaje(msg) {
+    const m = msg.message || {};
+
+    return (
+        m.conversation ||
+        m.extendedTextMessage?.text ||
+        m.imageMessage?.caption ||
+        m.videoMessage?.caption ||
+        m.documentMessage?.caption ||
+        ''
+    ).trim();
+}
+
+function jidRemitente(msg) {
+    return msg.key.participant ||
+        msg.key.remoteJid;
+}
+
+function mencionados(msg) {
+    return msg.message?.extendedTextMessage
+        ?.contextInfo?.mentionedJid || [];
+}
+
+async function responder(sock, chat, texto, opciones = {}) {
+    return sock.sendMessage(chat, {
+        text: texto,
+        ...opciones
+    });
+}
+
+async function esAdminGrupo(sock, chat, jid) {
+    if (!chat.endsWith('@g.us')) return false;
+
+    const metadata = await sock.groupMetadata(chat);
+    const participante = metadata.participants.find(
+        p => numero(p.id) === numero(jid)
+    );
+
+    return Boolean(participante?.admin);
+}
+
+async function ejecutarComando(sock, msg) {
+    const chat = msg.key.remoteJid;
+    const autor = jidRemitente(msg);
+    const texto = textoMensaje(msg);
+
+    if (!texto.startsWith('!')) return;
+
+    const partes = texto.slice(1).trim().split(/\s+/);
+    const comando = (partes.shift() || '').toLowerCase();
+    const args = partes;
+    const menciones = mencionados(msg);
+    const grupo = chat.endsWith('@g.us');
+
+    const responderAqui = t => responder(sock, chat, t);
+    const guardarRoles = () =>
+        guardarArchivo('roles.json', roles);
+
+    try {
+        switch (comando) {
+            // ===== GENERAL =====
+
+            case 'menu':
+            case 'ayuda':
+                return responderAqui(
+`╭━━━ *GREENVILLENIGHT FF* ━━━╮
+┃ 🤖 !ping
+┃ 👤 !perfil
+┃ 🎭 !mirol
+┃ 📋 !roles
+┃ 💰 !dinero
+┃ 🎁 !daily
+┃ 🛠️ !trabajar
+┃ 🏦 !depositar cantidad
+┃ 💸 !retirar cantidad
+┃ 🤝 !pagar cantidad @usuario
+┃ 🥷 !robar @usuario
+┃ 🛒 !tienda
+┃ 🛍️ !comprar artículo
+┃ 🎒 !inventario
+┃ 🏆 !top
+┃ ⚠️ !warn @usuario motivo
+┃ 📄 !warns @usuario
+┃ 👢 !kick @usuario
+┃ 📢 !todos mensaje
+┃ 🔒 !cerrar
+┃ 🔓 !abrir
+┃ 🔗 !link
+┃ 🏅 !asignar @usuario rol
+╰━━━━━━━━━━━━━━━━━━━━━━╯`
+                );
+
+            case 'ping':
+                return responderAqui('🏓 Pong! GreenvilleNight FF está activo.');
+
+            case 'perfil': {
+                const u = usuarioEco(autor);
+                guardarEconomia();
+
+                return responderAqui(
+`👤 *PERFIL*
+Número: ${numero(autor)}
+Rol: ${obtenerRol(autor)}
+Dinero: ${dinero(u.dinero)}
+Banco: ${dinero(u.banco)}`
+                );
+            }
+
+            case 'mirol':
+                return responderAqui(
+                    `🎭 Tu rol es: *${obtenerRol(autor)}*`
+                );
+
+            case 'roles':
+                return responderAqui(
+                    '📋 *ROLES DISPONIBLES*\n' +
+                    Object.entries(niveles)
+                        .map(([rol, nivel]) => `${nivel}. ${rol}`)
+                        .join('\n')
+                );
+
+            // ===== ECONOMÍA =====
+
+            case 'dinero':
+            case 'balance': {
+                const u = usuarioEco(autor);
+                guardarEconomia();
+
+                return responderAqui(
+                    `💰 Efectivo: ${dinero(u.dinero)}\n🏦 Banco: ${dinero(u.banco)}`
+                );
+            }
+
+            case 'daily': {
+                const u = usuarioEco(autor);
+                const ahora = Date.now();
+                const espera = 24 * 60 * 60 * 1000;
+                const restante = espera - (ahora - u.ultimoDaily);
+
+                if (restante > 0) {
+                    const horas = Math.ceil(restante / 3600000);
+                    return responderAqui(
+                        `⏳ Ya reclamaste tu recompensa. Vuelve en ${horas} hora(s).`
+                    );
+                }
+
+                const premio = 1000 + Math.floor(Math.random() * 4001);
+                u.dinero += premio;
+                u.ultimoDaily = ahora;
+                guardarEconomia();
+
+                return responderAqui(
+                    `🎁 Recibiste ${dinero(premio)}. ¡Vuelve mañana!`
+                );
+            }
+
+            case 'trabajar': {
+                const u = usuarioEco(autor);
+                const trabajos = [
+                    'mecánico',
+                    'taxista',
+                    'repartidor',
+                    'guardia de seguridad',
+                    'conductor'
+                ];
+
+                const trabajo =
+                    trabajos[Math.floor(Math.random() * trabajos.length)];
+                const premio = 200 + Math.floor(Math.random() * 801);
+
+                u.dinero += premio;
+                guardarEconomia();
+
+                return responderAqui(
+                    `🛠️ Trabajaste como ${trabajo} y ganaste ${dinero(premio)}.`
+                );
+            }
+
+            case 'depositar': {
+                const u = usuarioEco(autor);
+                const cantidad = Number(args[0]);
+
+                if (!Number.isSafeInteger(cantidad) || cantidad <= 0) {
+                    return responderAqui('Uso: !depositar 500');
+                }
+
+                if (cantidad > u.dinero) {
+                    return responderAqui('❌ No tienes suficiente efectivo.');
+                }
+
+                u.dinero -= cantidad;
+                u.banco += cantidad;
+                guardarEconomia();
+
+                return responderAqui(
+                    `🏦 Depositaste ${dinero(cantidad)}.`
+                );
+            }
+
+            case 'retirar': {
+                const u = usuarioEco(autor);
+                const cantidad = Number(args[0]);
+
+                if (!Number.isSafeInteger(cantidad) || cantidad <= 0) {
+                    return responderAqui('Uso: !retirar 500');
+                }
+
+                if (cantidad > u.banco) {
+                    return responderAqui('❌ No tienes suficiente dinero en el banco.');
+                }
+
+                u.banco -= cantidad;
+                u.dinero += cantidad;
+                guardarEconomia();
+
+                return responderAqui(
+                    `💵 Retiraste ${dinero(cantidad)}.`
+                );
+            }
+
+            case 'pagar': {
+                const objetivo = menciones[0];
+                const cantidad = Number(args.find(
+                    a => /^\d+$/.test(a)
+                ));
+
+                if (!objetivo) {
+                    return responderAqui('Uso: !pagar 500 @usuario');
+                }
+
+                if (numero(objetivo) === numero(autor)) {
+                    return responderAqui('❌ No puedes pagarte a ti mismo.');
+                }
+
+                if (!Number.isSafeInteger(cantidad) || cantidad <= 0) {
+                    return responderAqui('❌ Indica una cantidad válida.');
+                }
+
+                const emisor = usuarioEco(autor);
+                const receptor = usuarioEco(objetivo);
+
+                if (cantidad > emisor.dinero) {
+                    return responderAqui('❌ No tienes suficiente dinero.');
+                }
+
+                emisor.dinero -= cantidad;
+                receptor.dinero += cantidad;
+                guardarEconomia();
+
+                return responderAqui(
+                    `🤝 Enviaste ${dinero(cantidad)} a @${numero(objetivo)}.`,
+                    { mentions: [objetivo] }
+                );
+            }
+
+            case 'robar': {
+                const objetivo = menciones[0];
+
+                if (!objetivo) {
+                    return responderAqui('Uso: !robar @usuario');
+                }
+
+                if (numero(objetivo) === numero(autor)) {
+                    return responderAqui('❌ No puedes robarte a ti mismo.');
+                }
+
+                const ladron = usuarioEco(autor);
+                const victima = usuarioEco(objetivo);
+
+                if (victima.dinero < 100) {
+                    return responderAqui('😅 Esa persona no tiene suficiente efectivo.');
+                }
+
+                if (Math.random() < 0.5) {
+                    const botin = Math.min(
+                        victima.dinero,
+                        100 + Math.floor(Math.random() * 401)
+                    );
+
+                    victima.dinero -= botin;
+                    ladron.dinero += botin;
+                    guardarEconomia();
+
+                    return responderAqui(
+                        `🥷 ¡Robo exitoso! Ganaste ${dinero(botin)}.`
+                    );
+                }
+
+                const multa = Math.min(
+                    ladron.dinero,
+                    100 + Math.floor(Math.random() * 201)
+                );
+
+                ladron.dinero -= multa;
+                guardarEconomia();
+
+                return responderAqui(
+                    `🚔 Te atraparon. Pagaste una multa de ${dinero(multa)}.`
+                );
+            }
+
+            case 'tienda':
+                return responderAqui(
+`🛒 *TIENDA*
+1. teléfono — 500
+2. coche — 5000
+3. casa — 15000
+
+Usa !comprar teléfono
+Usa !comprar coche
+Usa !comprar casa`
+                );
+
+            case 'comprar': {
+                const articulos = {
+                    telefono: 500,
+                    coche: 5000,
+                    casa: 15000
+                };
+
+                const articulo = (args[0] || '').toLowerCase();
+                const precio = articulos[articulo];
+
+                if (!precio) {
+                    return responderAqui(
+                        '❌ Artículo desconocido. Usa !tienda.'
+                    );
+                }
+
+                const u = usuarioEco(autor);
+
+                if (u.dinero < precio) {
+                    return responderAqui('❌ No tienes suficiente dinero.');
+                }
+
+                u.dinero -= precio;
+                u.inventario[articulo] =
+                    (u.inventario[articulo] || 0) + 1;
+
+                guardarEconomia();
+
+                return responderAqui(
+                    `🛍️ Compraste ${articulo} por ${dinero(precio)}.`
+                );
+            }
+
+            case 'inventario': {
+                const u = usuarioEco(autor);
+                const items = Object.entries(u.inventario);
+
+                guardarEconomia();
+
+                return responderAqui(
+                    items.length
+                        ? '🎒 *TU INVENTARIO*\n' +
+                          items.map(([item, cantidad]) =>
+                              `• ${item}: ${cantidad}`
+                          ).join('\n')
+                        : '🎒 Tu inventario está vacío.'
+                );
+            }
+
+            case 'top': {
+                const lista = Object.entries(economia)
+                    .sort((a, b) =>
+                        (Number(b[1].dinero) || 0) -
+                        (Number(a[1].dinero) || 0)
+                    )
+                    .slice(0, 10);
+
+                if (!lista.length) {
+                    return responderAqui('Todavía no hay jugadores en el ranking.');
+                }
+
+                return responderAqui(
+                    '🏆 *TOP 10 RICOS*\n' +
+                    lista.map(([jid, u], i) =>
+                        `${i + 1}. ${numero(jid)} — ${dinero(u.dinero || 0)}`
+                    ).join('\n')
+                );
+            }
+
+            // ===== ROLES PERSONALIZADOS =====
+
+            case 'asignar': {
+                if (!tieneRol(autor, 'owner')) {
+                    return responderAqui('⛔ Solo el propietario puede asignar roles.');
+                }
+
+                const objetivo = menciones[0];
+                const rol = (args.find(a =>
+                    Object.prototype.hasOwnProperty.call(niveles, a.toLowerCase())
+                ) || '').toLowerCase();
+
+                if (!objetivo || !rol) {
+                    return responderAqui(
+                        'Uso: !asignar @usuario admin\nRoles: verificado, helper, mod, admin, co-owner, owner'
+                    );
+                }
+
+                if (rol === 'owner' && (!OWNER_JID ||
+                    numero(autor) !== numero(OWNER_JID))) {
+                    return responderAqui('⛔ No puedes asignar el rol owner.');
+                }
+
+                if (numero(objetivo) === numero(autor) && rol !== 'usuario') {
+                    return responderAqui('❌ No puedes asignarte ese rol a ti mismo.');
+                }
+
+                roles[objetivo] = rol;
+                guardarRoles();
+
+                return responderAqui(
+                    `✅ Rol *${rol}* asignado a @${numero(objetivo)}.`,
+                    { mentions: [objetivo] }
+                );
+            }
+
+            // ===== MODERACIÓN =====
+
+            case 'kick': {
+                if (!grupo) {
+                    return responderAqui('Este comando solo funciona en grupos.');
+                }
+
+                if (!tieneRol(autor, 'mod') &&
+                    !(await esAdminGrupo(sock, chat, autor))) {
+                    return responderAqui('⛔ Necesitas ser moderador o administrador.');
+                }
+
+                if (!(await esAdminGrupo(sock, chat, autor))) {
+                    return responderAqui('❌ Para expulsar, también necesitas ser administrador de WhatsApp.');
+                }
+
+                const objetivo = menciones[0];
+
+                if (!objetivo) {
+                    return responderAqui('Uso: !kick @usuario');
+                }
+
+                if (numero(objetivo) === numero(autor)) {
+                    return responderAqui('❌ No puedes expulsarte a ti mismo.');
+                }
+
+                await sock.groupParticipantsUpdate(
+                    chat, [objetivo], 'remove'
+                );
+
+                return responderAqui('👢 Participante expulsado.');
+            }
+
+            case 'todos': {
+                if (!grupo) {
+                    return responderAqui('Este comando solo funciona en grupos.');
+                }
+
+                if (!tieneRol(autor, 'mod') &&
+                    !(await esAdminGrupo(sock, chat, autor))) {
+                    return responderAqui('⛔ No tienes permiso.');
+                }
+
+                const metadata = await sock.groupMetadata(chat);
+                const jids = metadata.participants.map(p => p.id);
+
+                return responder(
+                    sock,
+                    chat,
+                    `📢 *ATENCIÓN DEL GRUPO*\n${args.join(' ') || 'Todos'}\n\n` +
+                    jids.map(j => `@${numero(j)}`).join(' '),
+                    { mentions: jids }
+                );
+            }
+
+            case 'cerrar':
+            case 'abrir': {
+                if (!grupo) {
+                    return responderAqui('Este comando solo funciona en grupos.');
+                }
+
+                if (!(await esAdminGrupo(sock, chat, autor))) {
+                    return responderAqui('⛔ Necesitas ser administrador del grupo.');
+                }
+
+                await sock.groupSettingUpdate(
+                    chat,
+                    comando === 'cerrar' ? 'announcement' : 'not_announcement'
+                );
+
+                return responderAqui(
+                    comando === 'cerrar'
+                        ? '🔒 Solo los administradores pueden escribir.'
+                        : '🔓 Todos los participantes pueden escribir.'
+                );
+            }
+
+            case 'link': {
+                if (!grupo) {
+                    return responderAqui('Este comando solo funciona en grupos.');
+                }
+
+                if (!(await esAdminGrupo(sock, chat, autor))) {
+                    return responderAqui('⛔ Necesitas ser administrador del grupo.');
+                }
+
+                const codigo = await sock.groupInviteCode(chat);
+
+                return responderAqui(
+                    `🔗 Enlace de invitación:\nhttps://chat.whatsapp.com/${codigo}`
+                );
+            }
+
+            case 'warn': {
+                if (!grupo) {
+                    return responderAqui('Este comando solo funciona en grupos.');
+                }
+
+                if (!tieneRol(autor, 'mod') &&
+                    !(await esAdminGrupo(sock, chat, autor))) {
+                    return responderAqui('⛔ No tienes permiso para advertir.');
+                }
+
+                const objetivo = menciones[0];
+
+                if (!objetivo) {
+                    return responderAqui('Uso: !warn @usuario motivo');
+                }
+
+                avisos[objetivo] ||= [];
+                avisos[objetivo].push({
+                    motivo: args.filter(a => !a.startsWith('@')).join(' ') ||
+                        'Sin motivo especificado',
+                    fecha: new Date().toISOString(),
+                    grupo: chat
+                });
+
+                guardarArchivo('avisos.json', avisos);
+
+                return responderAqui(
+                    `⚠️ @${numero(objetivo)} recibió una advertencia. Total: ${avisos[objetivo].length}.`,
+                    { mentions: [objetivo] }
+                );
+            }
+
+            case 'warns': {
+                const objetivo = menciones[0] || autor;
+                const lista = (avisos[objetivo] || [])
+                    .filter(a => a.grupo === chat);
+
+                return responderAqui(
+                    lista.length
+                        ? `📄 *ADVERTENCIAS DE ${numero(objetivo)}*\n` +
+                          lista.map((a, i) =>
+                              `${i + 1}. ${a.motivo} (${a.fecha.slice(0, 10)})`
+                          ).join('\n')
+                        : '✅ Este usuario no tiene advertencias registradas aquí.'
+                );
+            }
+
+            default:
+                return;
+        }
+    } catch (error) {
+        console.error(`Error en !${comando}:`, error);
+        return responderAqui(
+            '❌ Ocurrió un error al ejecutar el comando. Revisa la consola.'
+        );
+    }
+}
+
+module.exports = { ejecutarComando };
+(startbot)
