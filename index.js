@@ -40,7 +40,7 @@ async function startBot(){
   });
 
   sock.ev.on('messages.upsert', async ({messages})=>{
-    const msg=messages[0]; if(!msg.message||msg.key.fromMe) return;
+    const msg=messages[0]; if(!msg.message) return;
     const texto=(msg.message.conversation||msg.message.extendedTextMessage?.text||msg.message.buttonsResponseMessage?.selectedButtonId||"").trim();
     const jid=msg.key.remoteJid; const userJid=msg.key.participant||jid; const pushName=msg.pushName||'Usuario';
 
