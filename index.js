@@ -9,7 +9,7 @@ let economy=safeRead('./economy.json',{});
 function save(p,o){try{fs.writeFileSync(p,JSON.stringify(o));}catch{}}
 let genericos=["dinero","banco","daily","trabajar","crime","robarbanco","slots","ruleta","blackjack","dados","apostar","loteria","depositar","retirar","pagar","robar","tienda","comprar","vender","inventario","casa","coche","mansion","yate","negocio","empresa","empleo","sueldo","impuestos","multa","prestamo","credito","deuda","billetera","cofre","subasta","mercado","oferta","comprarcasa","comprarcoche","vendercasa","vendercoche","alquilar","hipoteca","seguro","donar","propina","balance","topricos","top","cerrar","abrir","link","revocar","kick","ban","unban","warn","delwarn","warns","warnlist","mute","unmute","tempmute","tempban","clear","purge","del","antispam","antilink","antipalabras","antifake","welcome","bienvenida","goodbye","despedida","setname","setdesc","setpp","setppgc","promote","demote","admins","ownerlist","rolelist","asignar","mirol","roles","bot","boton","hidetag","tagall","todos","invitar","add","join","leave","memes","meme","chiste","dado","8ball","amor","gay","lesbiana","guapo","feo","suerte","futuro","frase","piropo","insulto","adivina","verdad","reto","pregunta","ppt","tijeras","caraocruz","cara","cruz","ship","shippear","topgays","toplindos","topfeos","topfamosos","topotakus","topamigos","formarpareja","pareja","amistad","enamorados","abrazar","besar","pegar","morder","cachetada","abrazo","beso","matar","disparar","golpear","acariciar","lamer","empujar","clima","tiempo","hora","fecha","calc","calculadora","google","youtube","wikipedia","traducir","idioma","tts","sticker","toimg","toaudio","tomedia","pdf","qr","qrcode","acortar","enlace","ip","dominio","pais","capital","bandera","poblacion","covid","noticia","noticias","precio","dolar","euro","bitcoin","ethereum","convertir","medida","peso","altura","imc","edad","cumple","recordatorio","alarma","nota","notas","encuesta","votacion","sorteo","rifa","ficha","perfil","dni","licencia","licenciaconducir","licenciaarma","pasaporte","trabajo","policia","ems","mecanico","taxista","bombero","abogado","juez","alcalde","ladron","pandilla","mafia","cartel","familia","casarp","garaje","vehiculo","matricula","placa","segurocoche","gasolina","reparar","taller","hospital","carcel","juzgado","bancorp","atm","tiendarp","armas","drogas","marihuana","cocaina","metanfetamina","dinerosucio","lavar","contrabando","robo","atraco","secuestro","rehenes","afk","online","offline","estado","bio","username","nombre","genero","ciudad","paisrp","instagram","tiktok","youtuberp","discord","whatsapp","telegram","facebook","twitter","parejarp","familiarp","amigosrp","enemigos","aliados","clan","team","escuadron","lider","colider","miembro","reclutar","expulsarclan","guerra","paz","alianza","trato","contrato","reunion","evento","fiesta","concierto","carrera","torneo","competencia","premio","trofeo","ranking","nivel","xp","rango","adivinanumero","ahorcado","sopa","crucigrama","trivia","quiz","math","matematicas","anagrama","memoria","parejas","simon","tetris","snake","pacman","ajedrez","damas","domino","uno","cartas","pokerrp","blackjackrp","ruletarp","tragamonedas","bingo","lotto","keno","carreracaballos","peleagallos","boxeo","lucha","futbol","basquet","tenis","golf","bowling","billar","dardos","tiro","arco","pesca","caza","minar","granja","construir","cocinar","fabricar","craft","evento","crearevento","unirevento","salirevento","listaeventos","sorteoevento","premioevento","ganador","podio","medalla","campeon","subcampeon","temporada","battlepass","pase","mision","misiones","diaria","semanal","mensual","logro","logros","insignia","badge","titulo","vip","premium","diamante","oro","plata","bronce","esmeralda","rubi","legendario","mitico","epico","raro","comun","caja","cofremisterioso","llave","recompensa","regalo","bonus","boost","x2","x3","megaevento","sorteogrande","ruletarusa","amor2","gay2","ship2","topricos2","topgays2","bienvenida2","crear","borrarcmd","comandoscreados","setwelcome","menu"];
 
-function getMoney(u){if(!economy[u])economy[u]={dinero:500,banco:0};return economy[u];}
+function getMoney(u){try{if(!economy[u])economy[u]={dinero:500,banco:0};return economy[u];}catch{return {dinero:500,banco:0};}}
 function rand(min,max){return Math.floor(Math.random()*(max-min+1))+min;}
 
 async function handleFunc(cmd,args,userJid){
@@ -42,20 +42,20 @@ async function handleFunc(cmd,args,userJid){
 
 async function start(){
  const {state,saveCreds}=await useMultiFileAuthState('auth');
- const sock=makeWASocket({auth:state,logger:P({level:'silent'}),browser:['GreenvilleNight','Chrome','121.0']});
+ const sock=makeWASocket({auth:state,logger:P({level:'silent'}),browser:['GreenvilleNight','Chrome','121.0'],printQRInTerminal:false,markOnlineOnConnect:false});
  sock.ev.on('creds.update',saveCreds);
  sock.ev.on('connection.update',async c=>{
   if(c.connection==='open')console.log('BOT ON 400 REALES CON FUNCION');
   if(c.connection==='close'){let r=(c.lastDisconnect?.error)?.output?.statusCode;if(r!==DisconnectReason.loggedOut)setTimeout(()=>start(),2000);}
  });
- setInterval(()=>{try{sock.sendPresenceUpdate('available');}catch{}},15000);
+ // presence removed for Render
  sock.ev.on('group-participants.update',async a=>{
   try{if(a.action==='add'&&bienvenida.on){for(let u of a.participants){let meta=await sock.groupMetadata(a.id).catch(()=>null);let g=meta?meta.subject:'Grupo';let t=bienvenida.texto.replace(/@user/g,'@'+u.split('@')[0]);await sock.sendMessage(a.id,{text:t,mentions:[u]});}}}catch{}
  });
  sock.ev.on('messages.upsert',async d=>{
   try{
    let m=d.messages[0];if(!m.message||m.key.fromMe)return;
-   let jid=m.key.remoteJid;let txt=(m.message.conversation||m.message.extendedTextMessage?.text||'').trim();
+   let jid=m.key.remoteJid;let txt=((m.message.conversation||m.message.extendedTextMessage?.text||m.message.imageMessage?.caption||'')+'').trim();
    if(!txt.startsWith('!'))return;
    let parts=txt.slice(1).split(' ');let cmd=parts[0].toLowerCase();let args=parts.slice(1);let argText=args.join(' ');
    let userJid=m.key.participant||jid;
