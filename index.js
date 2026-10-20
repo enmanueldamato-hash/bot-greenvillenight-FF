@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const pino = require('pino');
-const qrcode = require('qrcode-terminal');
+const QRCode = require('qrcode');
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -11,11 +11,47 @@ const {
 } = require('@whiskeysockets/baileys');
 
 const app = express();
-app.get('/', (_, res) => res.send('THE BLACK EMPIRE RP ONLINE'));
-app.get('/health', (_, res) => res.json({ ok: true }));
-app.listen(process.env.PORT || 3000, () =>
-  console.log('Servidor iniciado')
-);
+
+let qrCodeData = null;
+let isConnected = false;
+
+app.get('/', (req, res) => {
+  res.send(`
+    <html>
+      <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>THE BLACK EMPIRE RP</title>
+      </head>
+      <body style="background:#111;color:white;text-align:center;font-family:Arial;padding:30px">
+        <h1>👑 THE BLACK EMPIRE RP</h1>
+        <p>${isConnected ? '🟢 WhatsApp conectado' : '🟡 Esperando conexión'}</p>
+        ${qrCodeData ? `<img src="${qrCodeData}" width="280" alt="QR de WhatsApp">` : '<p>El QR aparecerá aquí cuando esté disponible.</p>'}
+        <p>Abre WhatsApp → Dispositivos vinculados → Vincular dispositivo.</p>
+        <a href="/qr" style="color:#55ccff">Ver QR</a>
+      </body>
+    </html>
+  `);
+});
+
+app.get('/qr', (req, res) => {
+  if (isConnected) {
+    return res.send('✅ WhatsApp ya está conectado.');
+  }
+  if (!qrCodeData) {
+    return res.send('⏳ QR todavía no disponible. Recarga esta página en unos segundos.');
+  }
+  res.send(`<html><body style="background:#111;color:white;text-align:center;font-family:Arial">
+    <h2>Escanea este QR con WhatsApp</h2>
+    <img src="${qrCodeData}" width="300">
+    <p><a href="/" style="color:#55ccff">Volver</a></p>
+  </body></html>`);
+});
+
+app.get('/health', (req, res) => res.json({ ok: true }));
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log('Servidor iniciado');
+});
 
 const PREFIX = '!';
 const OWNER_NUMBERS = (process.env.OWNER_NUMBERS || '')
@@ -24,6 +60,7 @@ const OWNER_NUMBERS = (process.env.OWNER_NUMBERS || '')
   .filter(Boolean);
 
 const DB_FILE = path.join(__dirname, 'black_empire_db.json');
+
 const ROLES = {
   owner: 100,
   'co-owner': 90,
@@ -72,7 +109,6 @@ function getUser(jid) {
     daily: 0,
     work: 0
   };
-
   if (OWNER_NUMBERS.includes(id)) db.users[id].role = 'owner';
   return db.users[id];
 }
@@ -92,7 +128,6 @@ function money(n) {
 function addXP(jid, amount = 1) {
   const u = getUser(jid);
   u.xp += amount;
-
   while (u.xp >= u.level * 100) {
     u.xp -= u.level * 100;
     u.level++;
@@ -119,47 +154,30 @@ async function requireRole(c, role = 'admin') {
 
 // MENÚ
 command('menu help comandos', 'Mostrar comandos', async c => {
-  const list = [...commands.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]));
-
-  await send(c,
-    `👑 THE BLACK EMPIRE RP\nComandos: ${list.length}\nPrefijo: !\n\n` +
-    list.map(([n, v]) => `!${n} — ${v.description}`).join('\n')
-  );
+  const list = [...commands.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  await send(c, `👑 THE BLACK EMPIRE RP\nComandos: ${list.length}\nPrefijo: !\n\n` +
+    list.map(([n, v]) => `!${n} — ${v.description}`).join('\n'));
 });
 
 command('ping', 'Probar el bot', c => send(c, '🏓 Pong. Estoy conectado.'));
-command('info botinfo', 'Información del bot', c =>
-  send(c, '👑 THE BLACK EMPIRE RP\nBot de comunidad y roleplay.')
-);
+command('info botinfo', 'Información del bot', c => send(c, '👑 THE BLACK EMPIRE RP\nBot de comunidad y roleplay.'));
 command('id', 'Mostrar tu ID', c => send(c, `ID: ${c.sender}`));
 
 command('mirol perfil', 'Ver perfil y rol', c => {
   const u = getUser(c.sender);
-  return send(c,
-    `👤 ${numberOf(c.sender)}\n` +
-    `Rol: ${u.role}\nNivel: ${u.level}\nXP: ${u.xp}\n` +
-    `Efectivo: $${money(u.money)}\nBanco: $${money(u.bank)}\n` +
-    `Advertencias: ${u.warns}`
-  );
+  return send(c, `👤 ${numberOf(c.sender)}\nRol: ${u.role}\nNivel: ${u.level}\nXP: ${u.xp}\nEfectivo: $${money(u.money)}\nBanco: $${money(u.bank)}\nAdvertencias: ${u.warns}`);
 });
 
-// ECONOMÍA
 command('dinero balance wallet', 'Consultar dinero', c => {
   const u = getUser(c.sender);
   return send(c, `💵 Efectivo: $${money(u.money)}\n🏦 Banco: $${money(u.bank)}`);
 });
 
-command('banco', 'Consultar banco', c =>
-  send(c, `🏦 Saldo: $${money(getUser(c.sender).bank)}`)
-);
+command('banco', 'Consultar banco', c => send(c, `🏦 Saldo: $${money(getUser(c.sender).bank)}`));
 
 command('daily diario', 'Recompensa diaria', async c => {
   const u = getUser(c.sender);
-  if (Date.now() - u.daily < 86400000) {
-    return send(c, '⏳ Ya reclamaste tu recompensa diaria.');
-  }
-
+  if (Date.now() - u.daily < 86400000) return send(c, '⏳ Ya reclamaste tu recompensa diaria.');
   const reward = 1000 + Math.floor(Math.random() * 1001);
   u.money += reward;
   u.daily = Date.now();
@@ -169,31 +187,21 @@ command('daily diario', 'Recompensa diaria', async c => {
 
 command('trabajar work', 'Trabajar por dinero', async c => {
   const u = getUser(c.sender);
-
-  if (Date.now() - u.work < 3600000) {
-    return send(c, '⏳ Puedes trabajar una vez por hora.');
-  }
-
+  if (Date.now() - u.work < 3600000) return send(c, '⏳ Puedes trabajar una vez por hora.');
   const jobs = ['mecánico', 'taxista', 'repartidor', 'paramédico', 'abogado'];
   const job = jobs[Math.floor(Math.random() * jobs.length)];
   const pay = 300 + Math.floor(Math.random() * 701);
-
   u.money += pay;
   u.work = Date.now();
   addXP(c.sender, 15);
   saveDB();
-
   await send(c, `🧰 Trabajaste de ${job} y ganaste $${money(pay)}. +15 XP.`);
 });
 
 command('depositar dep', 'Depositar dinero', async c => {
   const amount = Number(c.args[0]);
   const u = getUser(c.sender);
-
-  if (!Number.isSafeInteger(amount) || amount <= 0 || amount > u.money) {
-    return send(c, 'Uso: !depositar cantidad');
-  }
-
+  if (!Number.isSafeInteger(amount) || amount <= 0 || amount > u.money) return send(c, 'Uso: !depositar cantidad');
   u.money -= amount;
   u.bank += amount;
   saveDB();
@@ -203,11 +211,7 @@ command('depositar dep', 'Depositar dinero', async c => {
 command('retirar', 'Retirar dinero', async c => {
   const amount = Number(c.args[0]);
   const u = getUser(c.sender);
-
-  if (!Number.isSafeInteger(amount) || amount <= 0 || amount > u.bank) {
-    return send(c, 'Uso: !retirar cantidad');
-  }
-
+  if (!Number.isSafeInteger(amount) || amount <= 0 || amount > u.bank) return send(c, 'Uso: !retirar cantidad');
   u.bank -= amount;
   u.money += amount;
   saveDB();
@@ -215,69 +219,43 @@ command('retirar', 'Retirar dinero', async c => {
 });
 
 command('top topdinero ranking', 'Ranking económico', c => {
-  const rows = Object.entries(db.users)
-    .sort((a, b) =>
-      (b[1].money + b[1].bank) - (a[1].money + a[1].bank)
-    ).slice(0, 10);
-
-  return send(c, '🏆 TOP ECONOMÍA\n' +
-    (rows.map(([id, u], i) =>
-      `${i + 1}. ${id}: $${money(u.money + u.bank)}`
-    ).join('\n') || 'No hay jugadores todavía.')
-  );
+  const rows = Object.entries(db.users).sort((a, b) =>
+    (b[1].money + b[1].bank) - (a[1].money + a[1].bank)
+  ).slice(0, 10);
+  return send(c, '🏆 TOP ECONOMÍA\n' + (rows.map(([id, u], i) =>
+    `${i + 1}. ${id}: $${money(u.money + u.bank)}`
+  ).join('\n') || 'No hay jugadores todavía.'));
 });
 
 command('dar', 'Dar dinero (admin+)', async c => {
   if (!await requireRole(c)) return;
-
   const id = (c.args[0] || '').replace(/\D/g, '');
   const amount = Number(c.args[1]);
-
-  if (!id || !Number.isSafeInteger(amount) || amount <= 0) {
-    return send(c, 'Uso: !dar numero cantidad');
-  }
-
+  if (!id || !Number.isSafeInteger(amount) || amount <= 0) return send(c, 'Uso: !dar numero cantidad');
   getUser(`${id}@s.whatsapp.net`).money += amount;
   saveDB();
   await send(c, `✅ Añadiste $${money(amount)} a ${id}.`);
 });
 
-// ROLES
 command('roles', 'Mostrar jerarquía de roles', c =>
-  send(c, '👑 owner: dueño\nco-owner: copropietario\n' +
-    'admin: administrador\nmod: moderador\n' +
-    'verificado: usuario verificado\nmiembro: miembro')
-);
+  send(c, '👑 owner: dueño\nco-owner: copropietario\nadmin: administrador\nmod: moderador\nverificado: usuario verificado\nmiembro: miembro'));
 
 command('asignar', 'Asignar rol (dueño)', async c => {
   if (!isOwner(c.sender)) return send(c, '⛔ Solo el dueño.');
-
   const id = (c.args[0] || '').replace(/\D/g, '');
   const role = (c.args[1] || '').toLowerCase();
-
-  if (!id || !Object.hasOwn(ROLES, role)) {
-    return send(c, 'Uso: !asignar numero owner|co-owner|admin|mod|verificado|miembro');
-  }
-
-  if (OWNER_NUMBERS.includes(id) && role !== 'owner') {
-    return send(c, '⛔ No puedes cambiar el rol protegido de un dueño configurado.');
-  }
-
+  if (!id || !Object.hasOwn(ROLES, role)) return send(c, 'Uso: !asignar numero owner|co-owner|admin|mod|verificado|miembro');
+  if (OWNER_NUMBERS.includes(id) && role !== 'owner') return send(c, '⛔ No puedes cambiar el rol protegido de un dueño configurado.');
   getUser(`${id}@s.whatsapp.net`).role = role;
   saveDB();
   await send(c, `✅ ${id} ahora tiene el rol ${role}.`);
 });
 
 command('admins', 'Mostrar personal registrado', c => {
-  const staff = Object.entries(db.users)
-    .filter(([, u]) => (ROLES[u.role] || 0) >= ROLES.mod);
-
-  return send(c, '🛡️ PERSONAL\n' +
-    (staff.map(([id, u]) => `${u.role}: ${id}`).join('\n') || 'No hay personal registrado.')
-  );
+  const staff = Object.entries(db.users).filter(([, u]) => (ROLES[u.role] || 0) >= ROLES.mod);
+  return send(c, '🛡️ PERSONAL\n' + (staff.map(([id, u]) => `${u.role}: ${id}`).join('\n') || 'No hay personal registrado.'));
 });
 
-// MODERACIÓN
 command('cerrar', 'Cerrar grupo (admin+)', async c => {
   if (!await requireRole(c)) return;
   try {
@@ -313,11 +291,7 @@ command('tagall todos', 'Mencionar miembros (mod+)', async c => {
   try {
     const group = await c.sock.groupMetadata(c.chat);
     const mentions = group.participants.map(p => p.id);
-    await send(c,
-      '📣 Atención comunidad\n' +
-      mentions.map(j => '@' + numberOf(j)).join(' '),
-      { mentions }
-    );
+    await send(c, '📣 Atención comunidad\n' + mentions.map(j => '@' + numberOf(j)).join(' '), { mentions });
   } catch {
     await send(c, 'Este comando solo funciona en grupos.');
   }
@@ -327,11 +301,8 @@ command('kick expulsar', 'Expulsar miembro (admin+)', async c => {
   if (!await requireRole(c)) return;
   const id = (c.args[0] || '').replace(/\D/g, '');
   if (!id) return send(c, 'Uso: !kick numero');
-
   try {
-    await c.sock.groupParticipantsUpdate(
-      c.chat, [`${id}@s.whatsapp.net`], 'remove'
-    );
+    await c.sock.groupParticipantsUpdate(c.chat, [`${id}@s.whatsapp.net`], 'remove');
     await send(c, `Solicitud de expulsión enviada para ${id}.`);
   } catch {
     await send(c, 'No se pudo expulsar. Comprueba los permisos.');
@@ -342,11 +313,8 @@ command('promote', 'Hacer administrador (admin+)', async c => {
   if (!await requireRole(c)) return;
   const id = (c.args[0] || '').replace(/\D/g, '');
   if (!id) return send(c, 'Uso: !promote numero');
-
   try {
-    await c.sock.groupParticipantsUpdate(
-      c.chat, [`${id}@s.whatsapp.net`], 'promote'
-    );
+    await c.sock.groupParticipantsUpdate(c.chat, [`${id}@s.whatsapp.net`], 'promote');
     await send(c, 'Solicitud de promoción enviada.');
   } catch {
     await send(c, 'No se pudo promover al miembro.');
@@ -357,11 +325,8 @@ command('demote', 'Quitar administrador (admin+)', async c => {
   if (!await requireRole(c)) return;
   const id = (c.args[0] || '').replace(/\D/g, '');
   if (!id) return send(c, 'Uso: !demote numero');
-
   try {
-    await c.sock.groupParticipantsUpdate(
-      c.chat, [`${id}@s.whatsapp.net`], 'demote'
-    );
+    await c.sock.groupParticipantsUpdate(c.chat, [`${id}@s.whatsapp.net`], 'demote');
     await send(c, 'Solicitud para quitar administrador enviada.');
   } catch {
     await send(c, 'No se pudo quitar el administrador.');
@@ -372,7 +337,6 @@ command('warn advertir', 'Añadir advertencia (mod+)', async c => {
   if (!await requireRole(c, 'mod')) return;
   const id = (c.args[0] || '').replace(/\D/g, '');
   if (!id) return send(c, 'Uso: !warn numero');
-
   const u = getUser(`${id}@s.whatsapp.net`);
   u.warns++;
   saveDB();
@@ -388,49 +352,31 @@ command('resetwarn', 'Reiniciar advertencias (admin+)', async c => {
   if (!await requireRole(c)) return;
   const id = (c.args[0] || '').replace(/\D/g, '');
   if (!id) return send(c, 'Uso: !resetwarn numero');
-
   getUser(`${id}@s.whatsapp.net`).warns = 0;
   saveDB();
   await send(c, `Advertencias de ${id} reiniciadas.`);
 });
 
-// BIENVENIDA Y REGLAS
 command('bienvenida', 'Activar/desactivar bienvenida (admin+)', async c => {
   if (!await requireRole(c)) return;
   const value = (c.args[0] || '').toLowerCase();
-
-  if (!['on', 'off'].includes(value)) {
-    return send(c, 'Uso: !bienvenida on|off');
-  }
-
+  if (!['on', 'off'].includes(value)) return send(c, 'Uso: !bienvenida on|off');
   db.settings.welcome = value === 'on';
   saveDB();
   await send(c, `Bienvenida ${value === 'on' ? 'activada' : 'desactivada'}.`);
 });
 
 command('reglas normas', 'Mostrar reglas', c => send(c,
-  '📜 REGLAS — THE BLACK EMPIRE RP\n' +
-  '1. Respeta a todos.\n' +
-  '2. No hagas spam.\n' +
-  '3. No acoses ni amenaces.\n' +
-  '4. No compartas datos privados.\n' +
-  '5. Respeta al personal.\n' +
-  '6. No publiques enlaces peligrosos.\n' +
-  '7. Respeta la temática del grupo.'
-));
+  '📜 REGLAS — THE BLACK EMPIRE RP\n1. Respeta a todos.\n2. No hagas spam.\n3. No acoses ni amenaces.\n4. No compartas datos privados.\n5. Respeta al personal.\n6. No publiques enlaces peligrosos.\n7. Respeta la temática del grupo.'));
 
 command('reportar reporte', 'Enviar reporte', c =>
-  send(c, c.args.length
-    ? `📨 Reporte recibido: ${c.args.join(' ')}`
-    : 'Uso: !reportar explica el problema')
-);
+  send(c, c.args.length ? `📨 Reporte recibido: ${c.args.join(' ')}` : 'Uso: !reportar explica el problema'));
 
 command('crear', 'Crear respuesta personalizada (admin+)', async c => {
   if (!await requireRole(c)) return;
   const name = (c.args.shift() || '').toLowerCase();
   const response = c.args.join(' ');
   if (!name || !response) return send(c, 'Uso: !crear nombre respuesta');
-
   db.custom[name] = response;
   saveDB();
   await send(c, `✅ Comando !${name} creado.`);
@@ -440,13 +386,11 @@ command('borrarcmd', 'Borrar comando personalizado (admin+)', async c => {
   if (!await requireRole(c)) return;
   const name = (c.args[0] || '').toLowerCase();
   if (!db.custom[name]) return send(c, 'Ese comando no existe.');
-
   delete db.custom[name];
   saveDB();
   await send(c, `🗑️ Comando !${name} eliminado.`);
 });
 
-// NIVELES Y ROLEPLAY
 command('xp nivel', 'Consultar nivel', c => {
   const u = getUser(c.sender);
   return send(c, `⭐ Nivel ${u.level}\nXP: ${u.xp}/${u.level * 100}`);
@@ -456,7 +400,6 @@ command('subirnivel', 'Subir nivel (dueño)', async c => {
   if (!isOwner(c.sender)) return send(c, 'Solo el dueño.');
   const id = (c.args[0] || '').replace(/\D/g, '');
   if (!id) return send(c, 'Uso: !subirnivel numero');
-
   getUser(`${id}@s.whatsapp.net`).level++;
   saveDB();
   await send(c, `Nivel actualizado para ${id}.`);
@@ -465,7 +408,6 @@ command('subirnivel', 'Subir nivel (dueño)', async c => {
 command('bot', 'Pausar/reanudar comandos (dueño)', async c => {
   if (!isOwner(c.sender)) return send(c, 'Solo el dueño.');
   const value = (c.args[0] || '').toLowerCase();
-
   if (!['on', 'off'].includes(value)) return send(c, 'Uso: !bot on|off');
   db.settings.paused = value === 'off';
   saveDB();
@@ -477,33 +419,15 @@ command('menuadmin', 'Menú administrativo', async c => {
   await send(c, '!asignar !dar !cerrar !abrir !link !tagall !kick !promote !demote !warn !resetwarn !crear !borrarcmd !bienvenida');
 });
 
-command('dado dados', 'Lanzar dado', c =>
-  send(c, `🎲 Resultado: ${1 + Math.floor(Math.random() * 6)}`)
-);
-command('moneda', 'Lanzar moneda', c =>
-  send(c, Math.random() < 0.5 ? '🪙 Cara' : '🪙 Cruz')
-);
-command('suerte', 'Número aleatorio', c =>
-  send(c, `🍀 Número: ${1 + Math.floor(Math.random() * 100)}`)
-);
-command('chiste', 'Contar un chiste', c =>
-  send(c, '¿Por qué el coche fue al taller? Porque estaba cansado de dar vueltas.')
-);
-command('frase', 'Frase de comunidad', c =>
-  send(c, '🔥 La lealtad se demuestra con acciones, no con palabras.')
-);
-command('casar', 'Acción de matrimonio RP', c =>
-  send(c, `💍 Propuesta de matrimonio RP para ${c.args[0] || 'un jugador'}.`)
-);
-command('divorcio', 'Acción de divorcio RP', c =>
-  send(c, '💔 Acción de divorcio RP.')
-);
-command('hora fecha', 'Mostrar fecha y hora', c =>
-  send(c, new Date().toLocaleString('es-US', { timeZone: 'America/Chicago' }))
-);
+command('dado dados', 'Lanzar dado', c => send(c, `🎲 Resultado: ${1 + Math.floor(Math.random() * 6)}`));
+command('moneda', 'Lanzar moneda', c => send(c, Math.random() < 0.5 ? '🪙 Cara' : '🪙 Cruz'));
+command('suerte', 'Número aleatorio', c => send(c, `🍀 Número: ${1 + Math.floor(Math.random() * 100)}`));
+command('chiste', 'Contar un chiste', c => send(c, '¿Por qué el coche fue al taller? Porque estaba cansado de dar vueltas.'));
+command('frase', 'Frase de comunidad', c => send(c, '🔥 La lealtad se demuestra con acciones, no con palabras.'));
+command('casar', 'Acción de matrimonio RP', c => send(c, `💍 Propuesta de matrimonio RP para ${c.args[0] || 'un jugador'}.`));
+command('divorcio', 'Acción de divorcio RP', c => send(c, '💔 Acción RP de divorcio.'));
+command('hora fecha', 'Mostrar fecha y hora', c => send(c, new Date().toLocaleString('es-US', { timeZone: 'America/Chicago' })));
 
-// Comandos RP básicos. Estos son mensajes informativos, no sistemas
-// completos de inventario, vehículos, casas o trabajos profesionales.
 const rp = {
   ayuda: 'Usa !menu para ver los comandos.',
   casa: 'Sistema de casas RP: contacta al staff.',
@@ -525,7 +449,6 @@ const rp = {
   trabajos: 'Trabajos: mecánico, taxista, repartidor, paramédico y abogado.',
   comprar: 'Uso RP: especifica qué quieres comprar.',
   vender: 'Uso RP: especifica qué quieres vender.',
-  familia: 'Consulta al staff para registrar una familia.',
   server: 'Comunidad oficial: THE BLACK EMPIRE RP.',
   discord: 'Añade el enlace de tu Discord en el código.',
   youtube: 'Añade el canal oficial de YouTube.',
@@ -536,151 +459,4 @@ const rp = {
   evento: 'Consulta al staff para conocer los eventos.',
   sugerencia: 'Envía tus sugerencias al personal.',
   soporte: 'Usa !reportar para pedir ayuda.',
-  presentacion: 'Bienvenido a THE BLACK EMPIRE RP.'
-};
-
-for (const [name, response] of Object.entries(rp)) {
-  if (!commands.has(name)) {
-    command(name, 'Herramienta de roleplay', c => send(c, response));
-  }
-}
-
-// Rellena el menú hasta 200 comandos distintos. Los comandos generados
-// son básicos/informativos; las funciones avanzadas deben programarse aparte.
-const extraNames = `
-perfilrp personaje crearpersonaje borrarpersonaje nacimiento edad nombre apellido
-nacionalidad historia documentos pasaporte dni tarjeta telefono llamar ubicacionrp mapa gps
-ruta precio catalogo mercado pagar transferir prestamo deuda impuestos factura recibo cajero
-ahorros sueldo nomina recompensa misiones mision minar pescar cocinar limpiar construir reparar
-cultivar recolectar entregar repartir correr entrenar descansar comer beber dormir banarse curar
-herida medicamento policiajob emsjob mechanicjob taxijob lawyerjob reportero bombero seguridad
-jubilacion renunciar cita torneo sorteo encuesta votar anuncio noticias calendario horario pareja
-saludoroleplay emote accion escena dialogo radio frecuencia megafono gobierno ayuntamiento
-bancoestado concesionario garaje parking depositarvehiculo sacarvehiculo casas alquiler hipoteca
-llaves mudanza decorar muebles ropa uniforme mascara armario guardarropa tienda24 farmacia
-restaurante menucomida hamburguesa pizza cafe agua clima version soporte sugerencia bug denuncia
-queja stafflist ownerlist coownerlist adminlist modlist miembros grupo grupoinfo reglamento sanciones
-apelacion reportstaff turnostaff comunicado reunion convocatoria reclutamiento postular entrevista
-contratar despedir ascender curriculum entrada salida partepolicial partemedico historial antecedentes
-pruebas testigo evidencia licenciaconducir examen academia entrenamientopolicial patrulla codigo10
-codigo20 codigo30 alerta emergencia rescate doctor enfermero receta seguro prestigio reputacion
-logros medallas coleccion misinventario usarpocion usarobjeto regalar intercambiar duelo carrera
-trivia adivinanza piedra papel random participar equipos capitan marcador resultado foto avatar bio
-firma apodo titulo color emblema banner actualizacion mantenimiento latencia conexion ayudaeconomia
-ayudarol ayudagrupo ayudastaff contacto faq tutorial guia versionbot soporteadmin idea bugreport
-buscarstaff solicitarstaff solicitarrol solicitarverificacion solicitarempleo renunciartrabajo curriculum
-entrevista contratar despedir ascender bajarpuesto relojfichar hospital2 doctor2 enfermero2 cita2
-turno salida partepolicial2 parte medico2 antecedentes2 denuncia2 licenciaarmas prestigiopuntos
-topnivel creargrupo grupoayuda horarios faqstaff normasstaff reunionstaff bitacora registro auditoria
-descuento oferta inscripcion equipos capitan marcador resultado estadoevento aceptar rechazar confirmar
-cancelar salir volver continuar adopcion contrato renovar regalo intercambio avatar2 biografia
-`;
-
-for (const raw of extraNames.trim().split(/\s+/)) {
-  const name = raw.toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (!name || commands.has(name) || commands.size >= 200) continue;
-
-  command(name, 'Herramienta RP/comunidad básica', c =>
-    send(c, `🛠️ !${name}\nHerramienta básica de THE BLACK EMPIRE RP. Consulta al staff para el procedimiento.`)
-  );
-}
-
-let utility = 1;
-while (commands.size < 200) {
-  const name = `utilidad${utility++}`;
-  if (!commands.has(name)) {
-    command(name, 'Utilidad básica de comunidad', c =>
-      send(c, `Comando básico !${name} de THE BLACK EMPIRE RP.`)
-    );
-  }
-}
-
-async function startBot() {
-  const { state, saveCreds } = await useMultiFileAuthState(
-    path.join(__dirname, 'auth_info')
-  );
-
-  const sock = makeWASocket({
-    auth: state,
-    logger: pino({ level: 'silent' }),
-    printQRInTerminal: false,
-    browser: ['THE BLACK EMPIRE RP', 'Chrome', '1.0.0'],
-    markOnlineOnConnect: true,
-    syncFullHistory: false,
-    keepAliveIntervalMs: 25000
-  });
-
-  sock.ev.on('creds.update', saveCreds);
-
-  sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
-    if (qr) qrcode.generate(qr, { small: true });
-
-    if (connection === 'open') console.log('WhatsApp conectado.');
-
-    if (connection === 'close') {
-      const code = lastDisconnect?.error?.output?.statusCode;
-
-      if (code !== DisconnectReason.loggedOut) {
-        setTimeout(() => startBot().catch(console.error), 3000);
-      } else {
-        console.error('Sesión cerrada. Vuelve a vincular WhatsApp.');
-      }
-    }
-  });
-
-  sock.ev.on('group-participants.update', async update => {
-    if (!db.settings.welcome || update.action !== 'add') return;
-
-    for (const member of update.participants) {
-      try {
-        await sock.sendMessage(update.id, {
-          text: `👋 Bienvenido/a @${numberOf(member)} a THE BLACK EMPIRE RP.\nEscribe !reglas y !menu.`,
-          mentions: [member]
-        });
-      } catch (e) {
-        console.error('Error de bienvenida:', e);
-      }
-    }
-  });
-
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
-
-    for (const m of messages) {
-      if (!m.message || m.key.remoteJid === 'status@broadcast') continue;
-
-      const chat = m.key.remoteJid;
-      const sender = m.key.participant || m.key.remoteJid;
-      const text =
-        m.message.conversation ||
-        m.message.extendedTextMessage?.text ||
-        m.message.imageMessage?.caption ||
-        m.message.videoMessage?.caption || '';
-
-      if (!text.startsWith(PREFIX)) continue;
-
-      // Permite comandos desde la cuenta vinculada si WhatsApp entrega el mensaje.
-      const [name, ...args] = text.slice(PREFIX.length).trim().split(/\s+/);
-      if (!name) continue;
-      if (db.settings.paused && !isOwner(sender)) continue;
-
-      const ctx = { sock, chat, sender, args, text, message: m };
-      const entry = commands.get(name.toLowerCase());
-
-      try {
-        if (entry) {
-          await entry.handler(ctx);
-          addXP(sender, 1);
-          saveDB();
-        } else if (db.custom[name.toLowerCase()]) {
-          await send(ctx, db.custom[name.toLowerCase()]);
-        }
-      } catch (err) {
-        console.error('Error en comando:', name, err);
-        await send(ctx, '⚠️ Hubo un error ejecutando el comando.');
-      }
-    }
-  });
-}
-
-startBot().catch(console.error);
+  presentacion: 'Bienvenido a THE BLACK
