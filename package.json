@@ -1,9 +1,20 @@
+
 {
   "name": "the-black-empire-rp",
   "version": "1.0.0",
+  "description": "Bot WhatsApp GreenvilleNight FF",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
-  "type": "commonjs"
+  "type": "commonjs",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.18",
+    "express": "^4.18.2",
+    "axios": "^1.6.7",
+    "qrcode": "^1.5.3",
+    "qrcode-terminal": "^0.12.0",
+    "pino": "^8.19.3",
+    "fs-extra": "^11.2.0"
+  }
 }
