@@ -399,7 +399,6 @@ command('xp nivel', 'Consultar nivel', c => {
 command('subirnivel', 'Subir nivel (dueño)', async c => {
   if (!isOwner(c.sender)) return send(c, 'Solo el dueño.');
   const id = (c.args[0] || '').replace(/\D/g, '');
-  if (!id) return send(c, 'Uso: !subirnivel numero');
   getUser(`${id}@s.whatsapp.net`).level++;
   saveDB();
   await send(c, `Nivel actualizado para ${id}.`);
